@@ -1,1 +1,55 @@
-# constructiondaily
+# Construction Daily Report
+
+Internal web application for construction daily job reporting with:
+
+- React PWA frontend for mobile-first field entry
+- Django REST API backend for workflow and security controls
+- PostgreSQL data model for auditable project records
+- Object storage compatible media pipeline for photos and attachments
+
+## Repository Layout
+
+- `apps/web` - React + TypeScript + Vite PWA
+- `apps/api` - Django + DRF API services
+- `infra` - local deployment samples and environment templates
+- `docs` - architecture and operational guides
+
+## Design Goals
+
+- Daily-report-first workflow: draft, submit, review, approve, lock
+- Offline job-site data capture with conflict-aware sync
+- Defensible records through immutable audit events and PDF snapshots
+- Security-by-default: strict authorization, secure sessions, safe uploads
+
+## Quick Start
+
+### API
+
+1. Create virtual environment in `apps/api`.
+2. Install dependencies:
+   - `pip install -r requirements.txt`
+3. Initialize database:
+   - `python manage.py migrate`
+4. Seed pilot users/project (optional):
+   - `python manage.py seed_demo_data`
+5. Run API:
+   - `python manage.py runserver`
+
+### Web
+
+1. Install dependencies in `apps/web`:
+   - `npm install`
+2. Start development server:
+   - `npm run dev`
+
+## Security Notes
+
+- Session cookies are configured for `Secure`, `HttpOnly`, and `SameSite`.
+- Upload endpoints enforce type, extension, and file signature checks.
+- Audit logs are append-only for business-critical actions.
+- The app never stores credentials or API secrets in source code.
+
+## Validation Commands
+
+- Backend tests: `python manage.py test`
+- Frontend build validation: `npm run build`

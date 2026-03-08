@@ -1,0 +1,9 @@
+{
+  "name": "Construction Daily Report",
+  "short_name": "DailyReport",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f1f5f9",
+  "theme_color": "#1e3a5f",
+  "icons": []
+}
