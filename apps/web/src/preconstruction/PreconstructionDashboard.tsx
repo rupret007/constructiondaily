@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   createPlanSet,
   fetchPlanSets,
@@ -8,8 +11,6 @@ import {
 import type { PlanSet as PlanSetType, PlanSheet as PlanSheetType, Project } from "../types/api";
 import { PlanSetList } from "./PlanSetList";
 import { PlanSheetList } from "./PlanSheetList";
-
-type AreaView = "sets" | "sheets";
 
 type Props = {
   projectId: string;
@@ -28,7 +29,6 @@ export function PreconstructionDashboard({
   selectedProjectId,
   onProjectChange,
   onOpenSheet,
-  error,
   onClearError,
   onError,
 }: Props) {
@@ -120,65 +120,86 @@ export function PreconstructionDashboard({
   const selectedPlanSet = planSets.find((s) => s.id === selectedPlanSetId);
 
   return (
-    <div className="layout">
-      <section className="card preconstruction-sidebar">
-        <h2>Preconstruction</h2>
-        <div className="row">
-          <select
-            value={selectedProjectId}
-            onChange={(e) => onProjectChange(e.target.value)}
-            aria-label="Select project"
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.code} — {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        {!projectId ? (
-          <p className="empty-hint">Select a project to manage plan sets.</p>
-        ) : (
-          <>
-            {showCreateForm ? (
-              <div className="row">
-                <input
-                  type="text"
-                  value={createName}
-                  onChange={(e) => setCreateName(e.target.value)}
-                  placeholder="Plan set name"
-                  aria-label="Plan set name"
+    <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,40%)_1fr]">
+      <Card className="min-w-0">
+        <CardHeader>
+          <CardTitle>Preconstruction</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <label htmlFor="precon-project" className="text-sm font-medium text-foreground">
+              Project
+            </label>
+            <select
+              id="precon-project"
+              value={selectedProjectId}
+              onChange={(e) => onProjectChange(e.target.value)}
+              aria-label="Select project"
+              className="flex h-11 min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.code} — {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          {!projectId ? (
+            <p className="text-sm text-muted-foreground">Select a project to manage plan sets.</p>
+          ) : (
+            <>
+              {showCreateForm ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    type="text"
+                    value={createName}
+                    onChange={(e) => setCreateName(e.target.value)}
+                    placeholder="Plan set name"
+                    aria-label="Plan set name"
+                    className="min-w-[180px] flex-1"
+                  />
+                  <Button type="button" onClick={() => void handleCreatePlanSet()}>
+                    Create
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setShowCreateForm(false);
+                      setCreateName("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <Button type="button" onClick={() => setShowCreateForm(true)}>
+                  Create plan set
+                </Button>
+              )}
+              {loading && planSets.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              ) : (
+                <PlanSetList
+                  planSets={planSets}
+                  selectedPlanSetId={selectedPlanSetId}
+                  onSelectPlanSet={setSelectedPlanSetId}
                 />
-                <button type="button" onClick={() => void handleCreatePlanSet()}>
-                  Create
-                </button>
-                <button type="button" onClick={() => { setShowCreateForm(false); setCreateName(""); }}>
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button type="button" onClick={() => setShowCreateForm(true)}>
-                Create plan set
-              </button>
-            )}
-            {loading && planSets.length === 0 ? (
-              <p>Loading…</p>
-            ) : (
-              <PlanSetList
-                planSets={planSets}
-                selectedPlanSetId={selectedPlanSetId}
-                onSelectPlanSet={setSelectedPlanSetId}
-              />
-            )}
-          </>
-        )}
-      </section>
-      <section className="card preconstruction-main">
-        {!selectedPlanSetId ? (
-          <p className="empty-hint">Select a plan set to view and upload sheets.</p>
-        ) : (
-          <>
-            <h3>{selectedPlanSet?.name ?? "Plan set"}</h3>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+      <Card className="min-w-0">
+        <CardHeader>
+          <CardTitle>{selectedPlanSet?.name ?? "Plan set"}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!selectedPlanSetId ? (
+            <p className="text-sm text-muted-foreground">
+              Select a plan set to view and upload sheets.
+            </p>
+          ) : (
             <PlanSheetList
               planSetId={selectedPlanSetId}
               sheets={sheets}
@@ -188,9 +209,9 @@ export function PreconstructionDashboard({
               onRefresh={loadSheets}
               onOpenSheet={(sheetId) => onOpenSheet(sheetId, selectedPlanSetId)}
             />
-          </>
-        )}
-      </section>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

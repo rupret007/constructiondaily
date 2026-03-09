@@ -1,3 +1,5 @@
+import { Alert } from "@/components/ui/alert";
+
 type Props = {
   isOnline: boolean;
   lastFlushedCount: number;
@@ -5,13 +7,18 @@ type Props = {
 };
 
 export function OfflineBadge({ isOnline, lastFlushedCount, queuedCount }: Props) {
+  const message = isOnline
+    ? `Online${lastFlushedCount ? ` — synced ${lastFlushedCount} changes` : ""}${
+        queuedCount ? ` (${queuedCount} pending)` : ""
+      }`
+    : `Offline — ${queuedCount} queued changes`;
+
   return (
-    <div className={`offline-badge ${isOnline ? "online" : "offline"}`}>
-      {isOnline
-        ? `Online${lastFlushedCount ? ` - synced ${lastFlushedCount} changes` : ""}${
-            queuedCount ? ` (${queuedCount} pending)` : ""
-          }`
-        : `Offline - ${queuedCount} queued changes`}
-    </div>
+    <Alert
+      variant={isOnline ? "success" : "destructive"}
+      className="mb-4"
+    >
+      {message}
+    </Alert>
   );
 }

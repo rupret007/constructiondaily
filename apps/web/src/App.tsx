@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Alert } from "./components/ui/alert";
 import { LoginForm } from "./components/LoginForm";
 import { NavBar, type AppArea } from "./components/NavBar";
 import { OfflineBadge } from "./components/OfflineBadge";
@@ -107,7 +108,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <main className="container">
+      <main className="mx-auto max-w-6xl px-4 py-6">
         <LoginForm
           onSubmit={async (username, password) => {
             await login(username, password);
@@ -119,7 +120,7 @@ export default function App() {
   }
 
   return (
-    <main className="container">
+    <main className="mx-auto max-w-6xl px-4 py-6">
       <NavBar
         user={user}
         area={area}
@@ -145,7 +146,11 @@ export default function App() {
         }}
       />
       <OfflineBadge isOnline={isOnline} lastFlushedCount={lastFlushedCount} queuedCount={queuedCount} />
-      {error && <p className="error-text">{error}</p>}
+      {error && (
+        <Alert variant="destructive" className="mb-4">
+          {error}
+        </Alert>
+      )}
       {area === "preconstruction" ? (
         preconstructionSheetId ? (
           <SheetViewer
@@ -175,10 +180,11 @@ export default function App() {
           />
         )
       ) : (
-        <div className="layout">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,40%)_1fr]">
           <ReportList
           projects={projects}
           selectedProjectId={selectedProjectId}
+          selectedReportId={selectedReport?.id}
           onProjectChange={(projectId) => {
             setSelectedProjectId(projectId);
             setSelectedReport(null);

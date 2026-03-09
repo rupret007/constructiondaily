@@ -36,7 +36,9 @@ The app includes a **Preconstruction** area for plan annotation and takeoff: upl
    - `python manage.py migrate`
 4. Seed pilot users/project (optional):
    - `python manage.py seed_demo_data`
-5. Run API:
+5. Give your own user Preconstruction access (optional): if you use `createsuperuser` and want to use the Preconstruction area, add that user to the demo project with a write role:
+   - `python manage.py add_user_to_demo <your_username>`
+6. Run API:
    - `python manage.py runserver`
 
 ### Web
@@ -45,6 +47,10 @@ The app includes a **Preconstruction** area for plan annotation and takeoff: upl
    - `npm install`
 2. Start development server:
    - `npm run dev`
+
+### One-command startup (Windows)
+
+From the repo root, run **`start-dev.bat`** to open two windows: the API (port 8000) and the web dev server (port 5173). Then open http://127.0.0.1:5173 in your browser. Requires Python and Node.js in your PATH; run `migrate` and `npm install` once per machine as in Quick Start above.
 
 ## Security Notes
 
@@ -55,5 +61,6 @@ The app includes a **Preconstruction** area for plan annotation and takeoff: upl
 
 ## Validation Commands
 
-- Backend tests: `python manage.py test`
-- Frontend build validation: `npm run build`
+- Backend tests: `python manage.py test` (from `apps/api`)
+- Frontend tests: `npm run test` (from `apps/web`)
+- Frontend build validation: `npm run build` (from `apps/web`)
