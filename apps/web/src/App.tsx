@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { LoginForm } from "./components/LoginForm";
-import { NavBar } from "./components/NavBar";
+import { NavBar, type AppArea } from "./components/NavBar";
 import { OfflineBadge } from "./components/OfflineBadge";
 import { ReportDetail } from "./components/ReportDetail";
 import { ReportList } from "./components/ReportList";
 import { useOfflineSync } from "./hooks/useOfflineSync";
+import { PreconstructionDashboard } from "./preconstruction/PreconstructionDashboard";
+import { SheetViewer } from "./preconstruction/SheetViewer";
 import { enqueueMutation } from "./offline/queue";
 import { getSession, login, logout } from "./services/auth";
 import { fetchProjects } from "./services/projects";
@@ -22,9 +24,12 @@ export default function App() {
   const [user, setUser] = useState<ApiUser | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [area, setArea] = useState<AppArea>("reports");
   const [reports, setReports] = useState<DailyReport[]>([]);
   const [selectedReport, setSelectedReport] = useState<DailyReport | null>(null);
   const [error, setError] = useState("");
+  const [preconstructionSheetId, setPreconstructionSheetId] = useState<string | null>(null);
+  const [preconstructionPlanSetId, setPreconstructionPlanSetId] = useState<string | null>(null);
   const { isOnline, lastFlushedCount, queuedCount } = useOfflineSync();
 
   async function loadSessionAndProjects() {
@@ -117,6 +122,14 @@ export default function App() {
     <main className="container">
       <NavBar
         user={user}
+        area={area}
+        onAreaChange={(newArea) => {
+          setArea(newArea);
+          if (newArea === "preconstruction") {
+            setPreconstructionSheetId(null);
+            setPreconstructionPlanSetId(null);
+          }
+        }}
         onLogout={() => {
           void logout().finally(() => {
             setUser(null);
@@ -124,14 +137,46 @@ export default function App() {
             setReports([]);
             setSelectedProjectId("");
             setSelectedReport(null);
+            setArea("reports");
+            setPreconstructionSheetId(null);
+            setPreconstructionPlanSetId(null);
             setError("");
           });
         }}
       />
       <OfflineBadge isOnline={isOnline} lastFlushedCount={lastFlushedCount} queuedCount={queuedCount} />
       {error && <p className="error-text">{error}</p>}
-      <div className="layout">
-        <ReportList
+      {area === "preconstruction" ? (
+        preconstructionSheetId ? (
+          <SheetViewer
+            sheetId={preconstructionSheetId}
+            planSetId={preconstructionPlanSetId ?? ""}
+            onBack={() => {
+              setPreconstructionSheetId(null);
+              setPreconstructionPlanSetId(null);
+            }}
+          />
+        ) : (
+          <PreconstructionDashboard
+            projectId={selectedProjectId}
+            projects={projects}
+            selectedProjectId={selectedProjectId}
+            onProjectChange={(projectId) => {
+              setSelectedProjectId(projectId);
+              setError("");
+            }}
+            onOpenSheet={(sheetId, planSetId) => {
+              setPreconstructionSheetId(sheetId);
+              setPreconstructionPlanSetId(planSetId);
+            }}
+            error={error}
+            onClearError={() => setError("")}
+            onError={setError}
+          />
+        )
+      ) : (
+        <div className="layout">
+          <ReportList
           projects={projects}
           selectedProjectId={selectedProjectId}
           onProjectChange={(projectId) => {
@@ -211,7 +256,8 @@ export default function App() {
             }
           }}
         />
-      </div>
+        </div>
+      )}
     </main>
   );
 }

@@ -25,6 +25,29 @@ body {
   gap: 1rem;
 }
 
+.navbar-tabs {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.navbar-tab {
+  padding: 0.4rem 0.8rem;
+  border-radius: 0.4rem;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.navbar-tab:hover {
+  background: #e2e8f0;
+}
+
+.navbar-tab.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
 .navbar-actions {
   display: flex;
   gap: 1rem;
@@ -122,9 +145,67 @@ button:disabled {
   grid-template-columns: 1fr auto auto;
   justify-content: space-between;
   background: #f8fafc;
-  border-color: #dbeafe;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.4rem;
   color: #0f172a;
   text-align: left;
+  padding: 0.5rem 0.75rem;
+}
+
+.report-row.selected {
+  border-color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.report-row-sheet {
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+}
+
+.empty-hint {
+  color: #64748b;
+  font-size: 0.95rem;
+  margin: 0.5rem 0;
+}
+
+.preconstruction-sidebar {
+  min-width: 0;
+}
+
+.preconstruction-main {
+  min-width: 0;
+}
+
+.sheet-viewer-container {
+  max-width: 100%;
+}
+
+.sheet-viewer-canvas-wrap {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.sheet-viewer-sidebars {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.snapshot-locked {
+  font-weight: 600;
+  color: #0f766e;
+}
+
+.snapshot-draft {
+  font-weight: 500;
+  color: #64748b;
+}
+
+.sheet-viewer-annotation-tools {
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 
 .action-row {

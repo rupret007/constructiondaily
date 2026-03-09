@@ -21,6 +21,10 @@ Internal web application for construction daily job reporting with:
 - Defensible records through immutable audit events and PDF snapshots
 - Security-by-default: strict authorization, secure sessions, safe uploads
 
+## Preconstruction (Plan Annotation)
+
+The app includes a **Preconstruction** area for plan annotation and takeoff: upload PDF plan sheets, draw annotations, record quantities, use AI-assisted suggestions (mock in v1), create **revision snapshots** (with optional lock for defensibility), and **export** takeoff data as JSON or CSV (export records are stored for audit). All actions are project-scoped and auditable. Locked snapshots and AI suggestion outcomes are stored so they can serve as high-quality labeled data for future learning. See **[docs/preconstruction.md](docs/preconstruction.md)** for step-by-step workflows, definitions, learning signals, and architecture reference (endpoints, components, limitations, next steps). Plan files are stored under the API media directory (e.g. `media/plans/`).
+
 ## Quick Start
 
 ### API

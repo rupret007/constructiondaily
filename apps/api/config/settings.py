@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "safety",
     "audit",
     "files",
+    "preconstruction",
 ]
 
 MIDDLEWARE = [
