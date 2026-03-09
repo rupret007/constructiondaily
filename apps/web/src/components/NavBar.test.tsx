@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { NavBar } from "./NavBar";
 
 describe("NavBar", () => {
-  const user = { username: "testuser", first_name: "Test", last_name: "User" };
+  const user = { id: 1, username: "testuser", first_name: "Test", last_name: "User" };
 
   it("renders app title and tabs", () => {
     render(

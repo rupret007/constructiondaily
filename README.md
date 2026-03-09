@@ -50,7 +50,7 @@ The app includes a **Preconstruction** area for plan annotation and takeoff: upl
 
 ### One-command startup (Windows)
 
-From the repo root, run **`start-dev.bat`** to open two windows: the API (port 8000) and the web dev server (port 5173). Then open http://127.0.0.1:5173 in your browser. Requires Python and Node.js in your PATH; run `migrate` and `npm install` once per machine as in Quick Start above.
+From the repo root, run **`start-dev.bat`** to start everything: it runs `migrate` then the API (port 8000), and `npm install` then the web dev server (port 5173) in two windows. Open http://127.0.0.1:5173 in your browser when ready. Requires Python and Node.js in your PATH. To stop the servers, run **`stop-dev.bat`** or close the two server windows.
 
 ## Security Notes
 

@@ -126,8 +126,8 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0 });
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
-  const [pageWidth, setPageWidth] = useState(612);
-  const [pageHeight, setPageHeight] = useState(792);
+  const [, setPageWidth] = useState(612);
+  const [, setPageHeight] = useState(792);
   const [addTakeoffCategory, setAddTakeoffCategory] = useState("doors");
   const [addTakeoffQuantity, setAddTakeoffQuantity] = useState("1");
   const [addTakeoffUnit, setAddTakeoffUnit] = useState("count");

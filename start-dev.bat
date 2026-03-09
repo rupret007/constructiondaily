@@ -1,7 +1,7 @@
 @echo off
 REM Start API and Web dev servers for Construction Daily Report.
-REM Opens two windows: API on port 8000, Web on port 5173.
-REM Close both windows to stop.
+REM Runs: migrate, then API (port 8000); npm install, then Web (port 5173).
+REM To stop: run stop-dev.bat or close the two server windows.
 
 set ROOT=%~dp0
 set API=%ROOT%apps\api
@@ -13,16 +13,16 @@ if exist "%NODE_DIR%\node.exe" set "PATH=%NODE_DIR%;%PATH%"
 
 echo Starting Construction Daily Report...
 echo.
-echo Window 1: Django API (http://127.0.0.1:8000)
-echo Window 2: Vite Web (http://127.0.0.1:5173)
+echo Window 1: Django API - migrate then runserver (http://127.0.0.1:8000)
+echo Window 2: Vite Web - npm install then dev (http://127.0.0.1:5173)
 echo.
 echo Open http://127.0.0.1:5173 in your browser when both are ready.
-echo Close the API and Web windows when done.
+echo To stop: run stop-dev.bat or close the two server windows.
 echo.
 
-start "Construction Daily - API" cmd /k "cd /d "%API%" && python manage.py runserver"
+start "Construction Daily - API" cmd /k "cd /d "%API%" && python manage.py migrate && python manage.py runserver"
 timeout /t 2 /nobreak >nul
-start "Construction Daily - Web" cmd /k "cd /d "%WEB%" && npm run dev"
+start "Construction Daily - Web" cmd /k "cd /d "%WEB%" && npm install && npm run dev"
 
 echo.
 echo Both servers started. Check the two new windows for any errors.
