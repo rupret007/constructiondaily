@@ -74,6 +74,9 @@ class DailyReportViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         with transaction.atomic():
             report = DailyReport.objects.select_for_update().get(pk=serializer.instance.pk)
+            incoming_project = serializer.validated_data.get("project", report.project)
+            if incoming_project.id != report.project_id:
+                raise ValidationError("Project cannot be changed after report creation.")
             if report.status == DailyReport.Status.LOCKED:
                 raise PermissionDenied("Locked reports cannot be edited.")
             incoming_revision = self.request.data.get("revision")
@@ -273,6 +276,9 @@ class BaseReportEntryViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         report = serializer.instance.report
+        incoming_report = serializer.validated_data.get("report", report)
+        if incoming_report.id != report.id:
+            raise ValidationError("Report cannot be changed after entry creation.")
         if report.status == DailyReport.Status.LOCKED:
             raise PermissionDenied("Locked reports cannot be changed.")
         if not user_has_project_role(

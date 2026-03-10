@@ -42,6 +42,9 @@ class SafetyEntryViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         report = serializer.instance.report
+        incoming_report = serializer.validated_data.get("report", report)
+        if incoming_report.id != report.id:
+            raise ValidationError("Report cannot be changed after entry creation.")
         if report.status == DailyReport.Status.LOCKED:
             raise ValidationError("Cannot edit safety entry in locked report.")
         if not user_has_project_role(

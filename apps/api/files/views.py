@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -52,8 +53,16 @@ class AttachmentViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def perform_update(self, serializer):
-        serializer.save()
         attachment = serializer.instance
+        report = attachment.report
+        if report.status == DailyReport.Status.LOCKED:
+            raise PermissionDenied("Locked reports cannot be changed.")
+        if not _can_upload_to_project(self.request.user, str(report.project_id)):
+            raise PermissionDenied("Insufficient permissions.")
+        incoming_report = serializer.validated_data.get("report", report)
+        if incoming_report.id != report.id:
+            raise ValidationError("Report cannot be changed after upload.")
+        serializer.save()
         record_audit_event(
             actor=self.request.user,
             event_type="attachment.updated",
@@ -64,6 +73,10 @@ class AttachmentViewSet(viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        if instance.report.status == DailyReport.Status.LOCKED:
+            raise PermissionDenied("Locked reports cannot be changed.")
+        if not _can_upload_to_project(self.request.user, str(instance.report.project_id)):
+            raise PermissionDenied("Insufficient permissions.")
         project_id = str(instance.report.project_id)
         attachment_id = str(instance.id)
         instance.delete()
@@ -132,11 +145,19 @@ class UploadIntentViewSet(viewsets.ModelViewSet):
         if not _can_upload_to_project(request.user, str(report.project_id)):
             return Response({"detail": "Insufficient permissions."}, status=status.HTTP_403_FORBIDDEN)
 
+        raw_max_size = request.data.get("max_size_bytes", 10 * 1024 * 1024)
+        try:
+            max_size = int(raw_max_size)
+        except (TypeError, ValueError):
+            return Response({"detail": "max_size_bytes must be a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+        if max_size <= 0:
+            return Response({"detail": "max_size_bytes must be a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+
         intent = UploadIntent.objects.create(
             report=report,
             created_by=request.user,
             expires_at=timezone.now() + timedelta(minutes=10),
-            max_size_bytes=int(request.data.get("max_size_bytes", 10 * 1024 * 1024)),
+            max_size_bytes=max_size,
         )
 
         record_audit_event(
