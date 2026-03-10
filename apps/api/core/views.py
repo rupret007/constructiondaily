@@ -133,6 +133,11 @@ class ProjectMembershipViewSet(
 
 
 class UserDirectoryViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    """
+    List/search users. Intentionally available to any authenticated user (e.g. for assignment,
+    mentions). To restrict to project members only, filter queryset by users who share a project
+    with request.user.
+    """
     serializer_class = UserSerializer
     queryset = User.objects.all()
     permission_classes = [IsAuthenticated]

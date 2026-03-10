@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
@@ -38,6 +39,7 @@ from .serializers import (
 )
 from .services import (
     accept_suggestion,
+    batch_accept_suggestions,
     build_snapshot_payload,
     create_export,
     create_export_record,
@@ -379,6 +381,35 @@ class AISuggestionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(project_id__in=_project_ids_for_user(self.request.user))
 
+    @action(detail=False, methods=["post"], url_path="batch_accept")
+    def batch_accept(self, request):
+        plan_sheet_id = request.data.get("plan_sheet")
+        min_confidence = request.data.get("min_confidence", 0.85)
+        if not plan_sheet_id:
+            return Response(
+                {"detail": "plan_sheet is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        plan_sheet = get_object_or_404(PlanSheet, id=plan_sheet_id)
+        if plan_sheet.project_id not in _project_ids_for_user(request.user):
+            raise PermissionDenied("Insufficient permissions.")
+        if not user_has_project_role(request.user, str(plan_sheet.project_id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
+        try:
+            min_conf = float(min_confidence)
+        except (TypeError, ValueError):
+            min_conf = 0.85
+        results = batch_accept_suggestions(
+            str(plan_sheet.id),
+            request.user,
+            min_confidence=min_conf,
+        )
+        return Response({
+            "accepted_count": len(results),
+            "annotations": [AnnotationItemSerializer(a).data for a, _ in results],
+            "takeoff_items": [TakeoffItemSerializer(t).data for _, t in results],
+        })
+
     @action(detail=True, methods=["post"], url_path="accept")
     def accept(self, request, pk=None):
         suggestion = self.get_object()
@@ -436,17 +467,18 @@ class RevisionSnapshotViewSet(viewsets.ModelViewSet):
         plan_set = serializer.validated_data["plan_set"]
         if not user_has_project_role(self.request.user, str(plan_set.project_id), PROJECT_WRITE_ROLES):
             raise PermissionDenied("Insufficient permissions.")
-        obj = serializer.save(created_by=self.request.user)
-        obj.snapshot_payload_json = build_snapshot_payload(plan_set)
-        obj.save(update_fields=["snapshot_payload_json"])
-        record_audit_event(
-            actor=self.request.user,
-            event_type="create_revision_snapshot",
-            object_type="RevisionSnapshot",
-            object_id=str(obj.id),
-            project_id=str(plan_set.project_id),
-            metadata={"name": obj.name},
-        )
+        with transaction.atomic():
+            obj = serializer.save(created_by=self.request.user)
+            obj.snapshot_payload_json = build_snapshot_payload(plan_set)
+            obj.save(update_fields=["snapshot_payload_json"])
+            record_audit_event(
+                actor=self.request.user,
+                event_type="create_revision_snapshot",
+                object_type="RevisionSnapshot",
+                object_id=str(obj.id),
+                project_id=str(plan_set.project_id),
+                metadata={"name": obj.name},
+            )
 
     @action(detail=True, methods=["post"], url_path="lock")
     def lock(self, request, pk=None):
@@ -457,21 +489,23 @@ class RevisionSnapshotViewSet(viewsets.ModelViewSet):
             (ProjectMembership.Role.PROJECT_MANAGER, ProjectMembership.Role.ADMIN),
         ):
             raise PermissionDenied("Insufficient permissions.")
-        if snapshot.status == RevisionSnapshot.Status.LOCKED:
-            return Response(
-                {"detail": "Snapshot is already locked."},
-                status=status.HTTP_400_BAD_REQUEST,
+        with transaction.atomic():
+            snapshot = RevisionSnapshot.objects.select_for_update().get(pk=snapshot.pk)
+            if snapshot.status == RevisionSnapshot.Status.LOCKED:
+                return Response(
+                    {"detail": "Snapshot is already locked."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            snapshot.status = RevisionSnapshot.Status.LOCKED
+            snapshot.save(update_fields=["status", "updated_at"])
+            record_audit_event(
+                actor=request.user,
+                event_type="lock_revision_snapshot",
+                object_type="RevisionSnapshot",
+                object_id=str(snapshot.id),
+                project_id=str(snapshot.project_id),
+                metadata={},
             )
-        snapshot.status = RevisionSnapshot.Status.LOCKED
-        snapshot.save(update_fields=["status", "updated_at"])
-        record_audit_event(
-            actor=request.user,
-            event_type="lock_revision_snapshot",
-            object_type="RevisionSnapshot",
-            object_id=str(snapshot.id),
-            project_id=str(snapshot.project_id),
-            metadata={},
-        )
         return Response(self.get_serializer(snapshot).data)
 
 

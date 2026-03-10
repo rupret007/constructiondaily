@@ -223,6 +223,25 @@ export async function rejectSuggestion(suggestionId: string): Promise<AISuggesti
   });
 }
 
+export type BatchAcceptResult = {
+  accepted_count: number;
+  annotations: AnnotationItem[];
+  takeoff_items: TakeoffItem[];
+};
+
+export async function batchAcceptSuggestions(
+  planSheetId: string,
+  minConfidence?: number
+): Promise<BatchAcceptResult> {
+  return apiRequest<BatchAcceptResult>(`${P}/suggestions/batch_accept/`, {
+    method: "POST",
+    body: JSON.stringify({
+      plan_sheet: planSheetId,
+      min_confidence: minConfidence ?? 0.85,
+    }),
+  });
+}
+
 export async function fetchSnapshots(planSetId: string): Promise<RevisionSnapshot[]> {
   const response = await apiRequest<RevisionSnapshot[]>(`${P}/snapshots/?plan_set=${planSetId}`);
   return Array.isArray(response) ? response : [];

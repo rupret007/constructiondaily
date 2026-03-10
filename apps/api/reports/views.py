@@ -4,6 +4,7 @@ import json
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+from django.db import transaction
 from django.http import HttpResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -71,36 +72,37 @@ class DailyReportViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        report = self.get_object()
-        if report.status == DailyReport.Status.LOCKED:
-            raise PermissionDenied("Locked reports cannot be edited.")
-        incoming_revision = self.request.data.get("revision")
-        if incoming_revision is not None:
-            try:
-                parsed_revision = int(incoming_revision)
-            except (TypeError, ValueError) as exc:
-                raise ValidationError("Revision must be numeric.") from exc
-            if parsed_revision != report.revision:
-                raise ValidationError("Report has changed. Refresh and manually resolve conflicts.")
-        if not user_has_project_role(
-            self.request.user,
-            str(report.project_id),
-            (
-                ProjectMembership.Role.FOREMAN,
-                ProjectMembership.Role.SUPERINTENDENT,
-                ProjectMembership.Role.ADMIN,
-            ),
-        ):
-            raise PermissionDenied("Insufficient permissions.")
-        updated = serializer.save()
-        record_audit_event(
-            actor=self.request.user,
-            event_type="report.updated",
-            object_type="DailyReport",
-            object_id=str(updated.id),
-            project_id=str(updated.project_id),
-            metadata={"status": updated.status},
-        )
+        with transaction.atomic():
+            report = DailyReport.objects.select_for_update().get(pk=serializer.instance.pk)
+            if report.status == DailyReport.Status.LOCKED:
+                raise PermissionDenied("Locked reports cannot be edited.")
+            incoming_revision = self.request.data.get("revision")
+            if incoming_revision is not None:
+                try:
+                    parsed_revision = int(incoming_revision)
+                except (TypeError, ValueError) as exc:
+                    raise ValidationError("Revision must be numeric.") from exc
+                if parsed_revision != report.revision:
+                    raise ValidationError("Report has changed. Refresh and manually resolve conflicts.")
+            if not user_has_project_role(
+                self.request.user,
+                str(report.project_id),
+                (
+                    ProjectMembership.Role.FOREMAN,
+                    ProjectMembership.Role.SUPERINTENDENT,
+                    ProjectMembership.Role.ADMIN,
+                ),
+            ):
+                raise PermissionDenied("Insufficient permissions.")
+            updated = serializer.save()
+            record_audit_event(
+                actor=self.request.user,
+                event_type="report.updated",
+                object_type="DailyReport",
+                object_id=str(updated.id),
+                project_id=str(updated.project_id),
+                metadata={"status": updated.status},
+            )
 
     def perform_destroy(self, instance):
         if instance.status != DailyReport.Status.DRAFT:
@@ -114,7 +116,17 @@ class DailyReportViewSet(viewsets.ModelViewSet):
             ),
         ):
             raise PermissionDenied("Insufficient permissions.")
+        project_id = str(instance.project_id)
+        report_id = str(instance.id)
         instance.delete()
+        record_audit_event(
+            actor=self.request.user,
+            event_type="report.deleted",
+            object_type="DailyReport",
+            object_id=report_id,
+            project_id=project_id,
+            metadata={"report_id": report_id},
+        )
 
     @action(detail=True, methods=["post"], url_path="submit")
     def submit(self, request, pk=None):

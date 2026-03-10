@@ -23,6 +23,7 @@ from preconstruction.models import (
 )
 from preconstruction.services import (
     accept_suggestion,
+    batch_accept_suggestions,
     build_snapshot_payload,
     reject_suggestion,
     run_plan_analysis,
@@ -386,6 +387,112 @@ class PreconstructionAPITests(TestCase):
             AuditEvent.objects.filter(event_type="edit_ai_suggestion").count(),
             1,
         )
+
+    def test_batch_accept_suggestions(self):
+        """Batch accept accepts only pending suggestions with confidence >= min_confidence."""
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        high = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.92,
+        )
+        mid = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.2, "y": 0.2, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.85,
+        )
+        low = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.3, "y": 0.3, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.5,
+        )
+        resp = self.client.post(
+            "/api/preconstruction/suggestions/batch_accept/",
+            {"plan_sheet": str(plan_sheet.id), "min_confidence": 0.85},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["accepted_count"], 2)
+        self.assertEqual(len(data["annotations"]), 2)
+        self.assertEqual(len(data["takeoff_items"]), 2)
+        high.refresh_from_db()
+        mid.refresh_from_db()
+        low.refresh_from_db()
+        self.assertEqual(high.decision_state, AISuggestion.DecisionState.ACCEPTED)
+        self.assertEqual(mid.decision_state, AISuggestion.DecisionState.ACCEPTED)
+        self.assertEqual(low.decision_state, AISuggestion.DecisionState.PENDING)
+
+    def test_batch_accept_requires_plan_sheet(self):
+        self.client.login(username="estimator1", password="test-pass")
+        resp = self.client.post(
+            "/api/preconstruction/suggestions/batch_accept/",
+            {},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("plan_sheet", resp.json().get("detail", ""))
+
+    def test_batch_accept_permission(self):
+        """User from another project cannot batch accept on this sheet."""
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        other_user = User.objects.create_user(username="other", password="test-pass")
+        other_project = Project.objects.create(code="OTHER", name="Other", location="Y")
+        ProjectMembership.objects.create(user=other_user, project=other_project, role=ProjectMembership.Role.ADMIN)
+        self.client.login(username="other", password="test-pass")
+        resp = self.client.post(
+            "/api/preconstruction/suggestions/batch_accept/",
+            {"plan_sheet": str(plan_sheet.id)},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 403)
 
     def test_revision_snapshot_and_export(self):
         self.client.login(username="estimator1", password="test-pass")

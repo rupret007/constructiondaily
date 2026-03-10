@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from core.models import ProjectMembership
 from core.permissions import user_has_project_role
+from reports.models import DailyReport
 from safety.models import SafetyEntry
 from safety.serializers import SafetyEntrySerializer
 
@@ -25,7 +26,7 @@ class SafetyEntryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         report = serializer.validated_data["report"]
-        if report.status == "locked":
+        if report.status == DailyReport.Status.LOCKED:
             raise ValidationError("Cannot add safety entry to locked report.")
         if not user_has_project_role(
             self.request.user,
@@ -41,7 +42,7 @@ class SafetyEntryViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         report = serializer.instance.report
-        if report.status == "locked":
+        if report.status == DailyReport.Status.LOCKED:
             raise ValidationError("Cannot edit safety entry in locked report.")
         if not user_has_project_role(
             self.request.user,
@@ -56,7 +57,7 @@ class SafetyEntryViewSet(viewsets.ModelViewSet):
         serializer.save()
 
     def perform_destroy(self, instance):
-        if instance.report.status == "locked":
+        if instance.report.status == DailyReport.Status.LOCKED:
             raise ValidationError("Cannot delete safety entry in locked report.")
         if not user_has_project_role(
             self.request.user,

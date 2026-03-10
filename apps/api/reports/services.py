@@ -56,6 +56,11 @@ def transition_report(report: DailyReport, action: str, actor, ip_address: str |
         raise ValidationError(f"Cannot {action} report while in '{report.status}'.")
 
     with transaction.atomic():
+        report = DailyReport.objects.select_for_update().get(pk=report.pk)
+        if report.status == DailyReport.Status.LOCKED and action != "sign":
+            raise ValidationError("Locked reports cannot be transitioned.")
+        if report.status != expected[action]:
+            raise ValidationError(f"Cannot {action} report while in '{report.status}'.")
         if action == "submit":
             report.status = DailyReport.Status.SUBMITTED
             report.rejection_reason = ""

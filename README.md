@@ -59,6 +59,10 @@ From the repo root, run **`start-dev.bat`** to start everything: it runs `migrat
 - Audit logs are append-only for business-critical actions.
 - The app never stores credentials or API secrets in source code.
 
+## Production Build
+
+From the repo root, run **`build.bat`** to build the frontend, collect static files, and run the deploy check. See [docs/deployment.md](docs/deployment.md) for full production deployment.
+
 ## Validation Commands
 
 - Backend tests: `python manage.py test` (from `apps/api`)

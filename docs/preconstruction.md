@@ -46,7 +46,7 @@ The Preconstruction (Plan Annotation and Takeoff) feature lets estimators upload
 ### 5. Create annotation layers and annotations
 
 - In the viewer, the **Layers** panel lists layers for the sheet. If there are none, adding an annotation will create a default layer.
-- Click **Add point** or **Add rectangle** to create annotations (default position; click-to-place not yet in UI). Use the **Annotations** list to select one; the **Annotation inspector** shows details and actions (Create takeoff from this, Delete).
+- Click **Add point** to enter placement mode, then click on the plan to place a point. Click **Add rectangle** to enter placement mode, then click and drag on the plan to draw a rectangle. Use the **Annotations** list to select one; the **Annotation inspector** shows details and actions (Create takeoff from this, Delete).
 - Annotations are stored in normalized coordinates (0–1) so they remain correct at any zoom level.
 
 ### 6. Create takeoff items

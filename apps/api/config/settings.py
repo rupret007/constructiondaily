@@ -32,6 +32,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -93,6 +94,13 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Include built Vite app for production (collectstatic gathers it)
+WEB_DIST = BASE_DIR.parent / "web" / "dist"
+if WEB_DIST.exists():
+    STATICFILES_DIRS = [WEB_DIST]
+else:
+    STATICFILES_DIRS = []
+
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
@@ -124,13 +132,21 @@ SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_HTTPONLY = False
-# Allow Vite dev server origin for local development
+# CSRF trusted origins (append production domain in env)
 CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
-]
+] + [o for o in os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
+
+# HTTPS (enable when behind SSL reverse proxy)
+if not DEBUG and os.getenv("DJANGO_SECURE_SSL_REDIRECT", "").lower() == "true":
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0") or "0")
+    if SECURE_HSTS_SECONDS:
+        SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+        SECURE_HSTS_PRELOAD = True
 
 REPORT_ATTACHMENT_MAX_BYTES = int(os.getenv("REPORT_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024)))
 REPORT_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "pdf"}

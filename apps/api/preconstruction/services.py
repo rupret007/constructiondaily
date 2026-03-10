@@ -5,10 +5,12 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from django.db import transaction
 from django.utils import timezone
 
 from audit.services import record_audit_event
@@ -39,6 +41,45 @@ def _record(event_type: str, actor, object_type: str, object_id: str, project_id
     )
 
 
+# ----- Category–unit defaults (CSI-aligned) -----
+# Map suggestion label / type to default TakeoffItem category and unit for estimator workflow.
+LABEL_TO_CATEGORY_UNIT: dict[str, tuple[str, str]] = {
+    "door": (TakeoffItem.Category.DOORS, TakeoffItem.Unit.COUNT),
+    "doors": (TakeoffItem.Category.DOORS, TakeoffItem.Unit.COUNT),
+    "window": (TakeoffItem.Category.WINDOWS, TakeoffItem.Unit.COUNT),
+    "windows": (TakeoffItem.Category.WINDOWS, TakeoffItem.Unit.COUNT),
+    "plumbing fixture": (TakeoffItem.Category.PLUMBING_FIXTURES, TakeoffItem.Unit.COUNT),
+    "fixture": (TakeoffItem.Category.PLUMBING_FIXTURES, TakeoffItem.Unit.COUNT),
+    "fixtures": (TakeoffItem.Category.PLUMBING_FIXTURES, TakeoffItem.Unit.COUNT),
+    "electrical fixture": (TakeoffItem.Category.ELECTRICAL_FIXTURES, TakeoffItem.Unit.COUNT),
+    "concrete area": (TakeoffItem.Category.CONCRETE_AREAS, TakeoffItem.Unit.SQUARE_FEET),
+    "concrete slab": (TakeoffItem.Category.CONCRETE_AREAS, TakeoffItem.Unit.SQUARE_FEET),
+    "opening": (TakeoffItem.Category.OPENINGS, TakeoffItem.Unit.COUNT),
+    "openings": (TakeoffItem.Category.OPENINGS, TakeoffItem.Unit.COUNT),
+    "room": (TakeoffItem.Category.ROOMS, TakeoffItem.Unit.COUNT),
+    "rooms": (TakeoffItem.Category.ROOMS, TakeoffItem.Unit.COUNT),
+    "linear measurement": (TakeoffItem.Category.LINEAR_MEASUREMENTS, TakeoffItem.Unit.LINEAR_FEET),
+}
+
+
+def _default_category_unit_for_suggestion(label: str | None, suggestion_type: str | None) -> tuple[str, str]:
+    """Derive default category and unit from suggestion label/type. Uses exact label match and
+    word-boundary matching to avoid over-match (e.g. 'room' in 'bathroom')."""
+    if not label:
+        return TakeoffItem.Category.CUSTOM, TakeoffItem.Unit.COUNT
+    label_lower = label.strip().lower()
+    if label_lower in LABEL_TO_CATEGORY_UNIT:
+        return LABEL_TO_CATEGORY_UNIT[label_lower]
+    # Word-boundary match: key must appear as a whole word in label (e.g. "door" in "door 1", not "doorway")
+    for key, (cat, unit) in LABEL_TO_CATEGORY_UNIT.items():
+        if re.search(r"\b" + re.escape(key) + r"\b", label_lower):
+            return cat, unit
+    # Polygon/area -> square_feet; point -> count; rectangle -> count
+    if suggestion_type == "polygon":
+        return TakeoffItem.Category.CONCRETE_AREAS, TakeoffItem.Unit.SQUARE_FEET
+    return TakeoffItem.Category.CUSTOM, TakeoffItem.Unit.COUNT
+
+
 # ----- Suggestion accept / reject -----
 # Learning signals (traceable feedback for future calibration; no active self-training):
 # AISuggestion.decision_state, decided_by, decided_at, accepted_annotation; AnnotationItem
@@ -62,158 +103,170 @@ def accept_suggestion(
     is set to EDITED and edit_ai_suggestion is audited; otherwise ACCEPTED and accept_ai_suggestion.
     These fields form the traceable feedback loop for future calibration (no active self-training).
     """
-    suggestion = AISuggestion.objects.select_related("plan_sheet", "analysis_run").get(
-        id=suggestion_id
-    )
-    if suggestion.decision_state != AISuggestion.DecisionState.PENDING:
-        raise ValueError("Suggestion has already been decided.")
+    with transaction.atomic():
+        suggestion = AISuggestion.objects.select_related("plan_sheet", "plan_sheet__plan_set", "analysis_run").select_for_update().get(
+            id=suggestion_id
+        )
+        if suggestion.decision_state != AISuggestion.DecisionState.PENDING:
+            raise ValueError("Suggestion has already been decided.")
 
-    plan_sheet = suggestion.plan_sheet
-    project_id = str(plan_sheet.project_id)
-    plan_set = plan_sheet.plan_set
+        plan_sheet = suggestion.plan_sheet
+        project_id = str(plan_sheet.project_id)
+        plan_set = plan_sheet.plan_set
 
-    overrides_provided = (
-        geometry_json is not None
-        or label is not None
-        or category is not None
-        or unit is not None
-        or quantity is not None
-    )
+        overrides_provided = (
+            geometry_json is not None
+            or label is not None
+            or category is not None
+            or unit is not None
+            or quantity is not None
+        )
 
-    if layer_id:
-        try:
-            layer = AnnotationLayer.objects.get(id=layer_id, plan_sheet=plan_sheet)
-        except AnnotationLayer.DoesNotExist:
-            raise ValueError("Layer not found or not on this sheet.")
-    else:
-        layer = AnnotationLayer.objects.filter(plan_sheet=plan_sheet).first()
-        if not layer:
-            layer = AnnotationLayer.objects.create(
-                project_id=plan_sheet.project_id,
-                plan_set=plan_set,
-                plan_sheet=plan_sheet,
-                name="Default",
-                created_by=user,
+        if layer_id:
+            try:
+                layer = AnnotationLayer.objects.get(id=layer_id, plan_sheet=plan_sheet)
+            except AnnotationLayer.DoesNotExist:
+                raise ValueError("Layer not found or not on this sheet.")
+        else:
+            layer = AnnotationLayer.objects.filter(plan_sheet=plan_sheet).first()
+            if not layer:
+                layer = AnnotationLayer.objects.create(
+                    project_id=plan_sheet.project_id,
+                    plan_set=plan_set,
+                    plan_sheet=plan_sheet,
+                    name="Default",
+                    created_by=user,
+                )
+
+        final_geometry = geometry_json if geometry_json is not None else suggestion.geometry_json
+        final_label = label if label is not None else suggestion.label
+
+        annotation = AnnotationItem.objects.create(
+            project_id=plan_sheet.project_id,
+            plan_sheet=plan_sheet,
+            layer=layer,
+            annotation_type=suggestion.suggestion_type,
+            geometry_json=final_geometry,
+            label=final_label or "",
+            source=AnnotationItem.Source.AI,
+            confidence=suggestion.confidence,
+            review_state=AnnotationItem.ReviewState.EDITED if overrides_provided else AnnotationItem.ReviewState.ACCEPTED,
+            created_by=user,
+            updated_by=user,
+        )
+
+        qty = quantity
+        if qty is None:
+            qty = Decimal("1")
+        elif isinstance(qty, str):
+            try:
+                qty = Decimal(qty)
+            except InvalidOperation:
+                raise ValueError("Invalid quantity.")
+        if qty < 0:
+            raise ValueError("Quantity must be non-negative.")
+
+        # Derive category/unit from suggestion label when not provided (estimator workflow)
+        if category is None or unit is None:
+            default_cat, default_unit = _default_category_unit_for_suggestion(
+                suggestion.label, suggestion.suggestion_type
             )
+            if category is None:
+                category = default_cat
+            if unit is None:
+                unit = default_unit
 
-    final_geometry = geometry_json if geometry_json is not None else suggestion.geometry_json
-    final_label = label if label is not None else suggestion.label
-
-    annotation = AnnotationItem.objects.create(
-        project_id=plan_sheet.project_id,
-        plan_sheet=plan_sheet,
-        layer=layer,
-        annotation_type=suggestion.suggestion_type,
-        geometry_json=final_geometry,
-        label=final_label or "",
-        source=AnnotationItem.Source.AI,
-        confidence=suggestion.confidence,
-        review_state=AnnotationItem.ReviewState.EDITED if overrides_provided else AnnotationItem.ReviewState.ACCEPTED,
-        created_by=user,
-        updated_by=user,
-    )
-
-    qty = quantity
-    if qty is None:
-        qty = Decimal("1")
-    elif isinstance(qty, str):
-        try:
-            qty = Decimal(qty)
-        except InvalidOperation:
-            raise ValueError("Invalid quantity.")
-    if qty < 0:
-        raise ValueError("Quantity must be non-negative.")
-
-    takeoff = TakeoffItem.objects.create(
-        project_id=plan_sheet.project_id,
-        plan_set=plan_set,
-        plan_sheet=plan_sheet,
-        category=category or TakeoffItem.Category.CUSTOM,
-        unit=unit or TakeoffItem.Unit.COUNT,
-        quantity=qty,
-        source=TakeoffItem.Source.AI_ASSISTED,
-        review_state=TakeoffItem.ReviewState.EDITED if overrides_provided else TakeoffItem.ReviewState.ACCEPTED,
-        created_by=user,
-        updated_by=user,
-    )
-    annotation.linked_takeoff_item = takeoff
-    annotation.save(update_fields=["linked_takeoff_item", "updated_at"])
-
-    suggestion.accepted_annotation = annotation
-    suggestion.decision_state = (
-        AISuggestion.DecisionState.EDITED if overrides_provided else AISuggestion.DecisionState.ACCEPTED
-    )
-    suggestion.decided_by = user
-    suggestion.decided_at = timezone.now()
-    suggestion.save(update_fields=["accepted_annotation", "decision_state", "decided_by", "decided_at", "updated_at"])
-
-    if overrides_provided:
-        override_keys = []
-        if geometry_json is not None:
-            override_keys.append("geometry_json")
-        if label is not None:
-            override_keys.append("label")
-        if category is not None:
-            override_keys.append("category")
-        if unit is not None:
-            override_keys.append("unit")
-        if quantity is not None:
-            override_keys.append("quantity")
-        _record(
-            "edit_ai_suggestion",
-            user,
-            "AISuggestion",
-            str(suggestion.id),
-            project_id,
-            {"annotation_id": str(annotation.id), "takeoff_id": str(takeoff.id), "overrides": override_keys},
+        takeoff = TakeoffItem.objects.create(
+            project_id=plan_sheet.project_id,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=category or TakeoffItem.Category.CUSTOM,
+            unit=unit or TakeoffItem.Unit.COUNT,
+            quantity=qty,
+            source=TakeoffItem.Source.AI_ASSISTED,
+            review_state=TakeoffItem.ReviewState.EDITED if overrides_provided else TakeoffItem.ReviewState.ACCEPTED,
+            created_by=user,
+            updated_by=user,
         )
-    else:
-        _record(
-            "accept_ai_suggestion",
-            user,
-            "AISuggestion",
-            str(suggestion.id),
-            project_id,
-            {"annotation_id": str(annotation.id), "takeoff_id": str(takeoff.id)},
+        annotation.linked_takeoff_item = takeoff
+        annotation.save(update_fields=["linked_takeoff_item", "updated_at"])
+
+        suggestion.accepted_annotation = annotation
+        suggestion.decision_state = (
+            AISuggestion.DecisionState.EDITED if overrides_provided else AISuggestion.DecisionState.ACCEPTED
         )
-    return annotation, takeoff
+        suggestion.decided_by = user
+        suggestion.decided_at = timezone.now()
+        suggestion.save(update_fields=["accepted_annotation", "decision_state", "decided_by", "decided_at", "updated_at"])
+
+        if overrides_provided:
+            override_keys = []
+            if geometry_json is not None:
+                override_keys.append("geometry_json")
+            if label is not None:
+                override_keys.append("label")
+            if category is not None:
+                override_keys.append("category")
+            if unit is not None:
+                override_keys.append("unit")
+            if quantity is not None:
+                override_keys.append("quantity")
+            _record(
+                "edit_ai_suggestion",
+                user,
+                "AISuggestion",
+                str(suggestion.id),
+                project_id,
+                {"annotation_id": str(annotation.id), "takeoff_id": str(takeoff.id), "overrides": override_keys},
+            )
+        else:
+            _record(
+                "accept_ai_suggestion",
+                user,
+                "AISuggestion",
+                str(suggestion.id),
+                project_id,
+                {"annotation_id": str(annotation.id), "takeoff_id": str(takeoff.id)},
+            )
+        return annotation, takeoff
 
 
 def run_plan_analysis(plan_sheet: PlanSheet, user_prompt: str, user, provider_name: str = "mock") -> AIAnalysisRun:
     """Create AIAnalysisRun, run provider, create AISuggestion rows, record audit."""
-    run = AIAnalysisRun.objects.create(
-        project=plan_sheet.project,
-        plan_set=plan_sheet.plan_set,
-        plan_sheet=plan_sheet,
-        provider_name=provider_name,
-        user_prompt=user_prompt or "",
-        status=AIAnalysisRun.Status.RUNNING,
-        request_payload_json={"user_prompt": user_prompt, "plan_sheet_id": str(plan_sheet.id)},
-        created_by=user,
-    )
-    try:
-        provider = get_provider(provider_name)
-        suggestions_data = provider.run_analysis(plan_sheet, user_prompt)
-        response_payload = {"suggestions": suggestions_data}
-        for s in suggestions_data:
-            AISuggestion.objects.create(
-                analysis_run=run,
-                project=plan_sheet.project,
-                plan_sheet=plan_sheet,
-                suggestion_type=s.get("suggestion_type", "rectangle"),
-                geometry_json=s.get("geometry_json", {}),
-                label=s.get("label", ""),
-                rationale=s.get("rationale", ""),
-                confidence=s.get("confidence"),
-            )
-        run.response_payload_json = response_payload
-        run.status = AIAnalysisRun.Status.COMPLETED
-    except Exception as e:
-        run.status = AIAnalysisRun.Status.FAILED
-        run.response_payload_json = {"error": str(e)}
-    finally:
-        run.completed_at = timezone.now()
-        run.save(update_fields=["status", "response_payload_json", "completed_at", "updated_at"])
+    with transaction.atomic():
+        run = AIAnalysisRun.objects.create(
+            project=plan_sheet.project,
+            plan_set=plan_sheet.plan_set,
+            plan_sheet=plan_sheet,
+            provider_name=provider_name,
+            user_prompt=user_prompt or "",
+            status=AIAnalysisRun.Status.RUNNING,
+            request_payload_json={"user_prompt": user_prompt, "plan_sheet_id": str(plan_sheet.id)},
+            created_by=user,
+        )
+        try:
+            provider = get_provider(provider_name)
+            suggestions_data = provider.run_analysis(plan_sheet, user_prompt)
+            response_payload = {"suggestions": suggestions_data}
+            for s in suggestions_data:
+                AISuggestion.objects.create(
+                    analysis_run=run,
+                    project=plan_sheet.project,
+                    plan_sheet=plan_sheet,
+                    suggestion_type=s.get("suggestion_type", "rectangle"),
+                    geometry_json=s.get("geometry_json", {}),
+                    label=s.get("label", ""),
+                    rationale=s.get("rationale", ""),
+                    confidence=s.get("confidence"),
+                )
+            run.response_payload_json = response_payload
+            run.status = AIAnalysisRun.Status.COMPLETED
+        except Exception as e:
+            run.status = AIAnalysisRun.Status.FAILED
+            run.response_payload_json = {"error": str(e)}
+        finally:
+            run.completed_at = timezone.now()
+            run.save(update_fields=["status", "response_payload_json", "completed_at", "updated_at"])
 
     _record(
         "trigger_ai_analysis",
@@ -224,6 +277,38 @@ def run_plan_analysis(plan_sheet: PlanSheet, user_prompt: str, user, provider_na
         {"status": run.status},
     )
     return run
+
+
+def batch_accept_suggestions(
+    plan_sheet_id: str,
+    user,
+    *,
+    min_confidence: float = 0.85,
+) -> list[tuple[AnnotationItem, TakeoffItem]]:
+    """
+    Accept all pending suggestions on a plan sheet with confidence >= min_confidence.
+    Returns list of (annotation, takeoff) for each accepted suggestion.
+    All accepts are committed in a single transaction; on first failure the whole batch rolls back.
+    """
+    qs = AISuggestion.objects.filter(
+        plan_sheet_id=plan_sheet_id,
+        decision_state=AISuggestion.DecisionState.PENDING,
+    ).select_related("plan_sheet", "plan_sheet__plan_set", "analysis_run")
+
+    results: list[tuple[AnnotationItem, TakeoffItem]] = []
+    with transaction.atomic():
+        for s in qs:
+            conf = s.confidence
+            if conf is None:
+                continue
+            try:
+                conf_val = float(conf)
+            except (TypeError, ValueError):
+                continue
+            if conf_val >= min_confidence:
+                ann, takeoff = accept_suggestion(str(s.id), user)
+                results.append((ann, takeoff))
+    return results
 
 
 def reject_suggestion(suggestion_id: str, user) -> AISuggestion:

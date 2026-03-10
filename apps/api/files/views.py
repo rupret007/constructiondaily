@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -49,6 +50,31 @@ class AttachmentViewSet(viewsets.ModelViewSet):
             return result
         serializer = self.get_serializer(result)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def perform_update(self, serializer):
+        serializer.save()
+        attachment = serializer.instance
+        record_audit_event(
+            actor=self.request.user,
+            event_type="attachment.updated",
+            object_type="Attachment",
+            object_id=str(attachment.id),
+            project_id=str(attachment.report.project_id),
+            metadata={},
+        )
+
+    def perform_destroy(self, instance):
+        project_id = str(instance.report.project_id)
+        attachment_id = str(instance.id)
+        instance.delete()
+        record_audit_event(
+            actor=self.request.user,
+            event_type="attachment.deleted",
+            object_type="Attachment",
+            object_id=attachment_id,
+            project_id=project_id,
+            metadata={"attachment_id": attachment_id},
+        )
 
     @action(detail=True, methods=["post"], url_path="scan-result")
     def scan_result(self, request, pk=None):
@@ -125,27 +151,30 @@ class UploadIntentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="upload")
     def upload(self, request, pk=None):
-        intent = self.get_object()
+        intent_for_access = self.get_object()
         uploaded_file = request.FILES.get("file")
         if not uploaded_file:
             return Response({"detail": "File is required."}, status=status.HTTP_400_BAD_REQUEST)
-        if intent.consumed:
-            return Response({"detail": "Upload intent already used."}, status=status.HTTP_400_BAD_REQUEST)
-        if intent.is_expired:
-            return Response({"detail": "Upload intent is expired."}, status=status.HTTP_400_BAD_REQUEST)
 
-        result = _create_attachment(
-            request_user=request.user,
-            report=intent.report,
-            uploaded_file=uploaded_file,
-            enforce_intent_limit=True,
-            intent_max_size=intent.max_size_bytes,
-        )
-        if isinstance(result, Response):
-            return result
+        with transaction.atomic():
+            intent = UploadIntent.objects.select_related("report").select_for_update().get(pk=intent_for_access.pk)
+            if intent.consumed:
+                return Response({"detail": "Upload intent already used."}, status=status.HTTP_400_BAD_REQUEST)
+            if intent.is_expired:
+                return Response({"detail": "Upload intent is expired."}, status=status.HTTP_400_BAD_REQUEST)
 
-        intent.consumed = True
-        intent.save(update_fields=["consumed", "updated_at"])
+            result = _create_attachment(
+                request_user=request.user,
+                report=intent.report,
+                uploaded_file=uploaded_file,
+                enforce_intent_limit=True,
+                intent_max_size=intent.max_size_bytes,
+            )
+            if isinstance(result, Response):
+                return result
+
+            intent.consumed = True
+            intent.save(update_fields=["consumed", "updated_at"])
         return Response(AttachmentSerializer(result).data, status=status.HTTP_201_CREATED)
 
 

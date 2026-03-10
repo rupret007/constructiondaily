@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import {
   acceptSuggestion,
+  batchAcceptSuggestions,
   createAnnotation,
   createAnnotationLayer,
   createExport,
@@ -57,6 +58,37 @@ function normToScreen(
   pageHeight: number
 ): { x: number; y: number } {
   return { x: x * pageWidth, y: y * pageHeight };
+}
+
+/** Derive default category and unit from suggestion label/type (mirrors backend mapping). */
+function defaultCategoryUnitForSuggestion(
+  label: string | null | undefined,
+  suggestionType: string | null | undefined
+): { category: string; unit: string } {
+  const labelLower = (label ?? "").trim().toLowerCase();
+  const map: Record<string, { category: string; unit: string }> = {
+    door: { category: "doors", unit: "count" },
+    doors: { category: "doors", unit: "count" },
+    window: { category: "windows", unit: "count" },
+    windows: { category: "windows", unit: "count" },
+    "plumbing fixture": { category: "plumbing_fixtures", unit: "count" },
+    fixture: { category: "plumbing_fixtures", unit: "count" },
+    fixtures: { category: "plumbing_fixtures", unit: "count" },
+    "electrical fixture": { category: "electrical_fixtures", unit: "count" },
+    "concrete area": { category: "concrete_areas", unit: "square_feet" },
+    "concrete slab": { category: "concrete_areas", unit: "square_feet" },
+    opening: { category: "openings", unit: "count" },
+    openings: { category: "openings", unit: "count" },
+    room: { category: "rooms", unit: "count" },
+    rooms: { category: "rooms", unit: "count" },
+    "linear measurement": { category: "linear_measurements", unit: "linear_feet" },
+  };
+  if (labelLower && labelLower in map) return map[labelLower];
+  for (const [key, value] of Object.entries(map)) {
+    if (labelLower.includes(key) || key.includes(labelLower)) return value;
+  }
+  if (suggestionType === "polygon") return { category: "concrete_areas", unit: "square_feet" };
+  return { category: "custom", unit: "count" };
 }
 
 function drawAnnotation(
@@ -134,6 +166,11 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [creating, setCreating] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiRunning, setAiRunning] = useState(false);
+  const [batchAccepting, setBatchAccepting] = useState(false);
+  const [placementMode, setPlacementMode] = useState<"none" | "point" | "rectangle">("none");
+  const [placementLabel, setPlacementLabel] = useState("");
+  const [rectDragStart, setRectDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [rectDragCurrent, setRectDragCurrent] = useState<{ x: number; y: number } | null>(null);
   const [suggestions, setSuggestions] = useState<AISuggestion[]>([]);
   const [snapshots, setSnapshots] = useState<RevisionSnapshot[]>([]);
   const [exports, setExports] = useState<ExportRecord[]>([]);
@@ -174,7 +211,11 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     void loadSheetAndData();
   }, [loadSheetAndData]);
 
-  const addAnnotation = async (annotationType: "point" | "rectangle", label: string) => {
+  const addAnnotationWithGeometry = async (
+    geometry_json: Record<string, unknown>,
+    annotationType: "point" | "rectangle",
+    label: string
+  ) => {
     if (!sheet) return;
     setCreating(true);
     try {
@@ -188,10 +229,6 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         });
         setLayers((prev) => [...prev, layer]);
       }
-      const geometry_json =
-        annotationType === "point"
-          ? { type: "point" as const, x: 0.5, y: 0.5 }
-          : { type: "rectangle" as const, x: 0.2, y: 0.2, width: 0.2, height: 0.15 };
       await createAnnotation({
         project: sheet.project,
         plan_sheet: sheetId,
@@ -206,6 +243,80 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     } finally {
       setCreating(false);
     }
+  };
+
+  const getNormalizedCoords = (e: React.MouseEvent<HTMLCanvasElement>): { x: number; y: number } | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return null;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x, y };
+  };
+
+  const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0 || creating) return;
+    if (placementMode === "point") {
+      const coords = getNormalizedCoords(e);
+      if (coords) {
+        e.stopPropagation();
+        void addAnnotationWithGeometry(
+          { type: "point", x: coords.x, y: coords.y },
+          "point",
+          placementLabel || "Point"
+        );
+        setPlacementMode("none");
+      }
+    } else if (placementMode === "rectangle") {
+      const coords = getNormalizedCoords(e);
+      if (coords) {
+        e.stopPropagation();
+        setRectDragStart(coords);
+        setRectDragCurrent(coords);
+      }
+    }
+  };
+
+  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (placementMode === "rectangle" && rectDragStart) {
+      const coords = getNormalizedCoords(e);
+      if (coords) {
+        e.stopPropagation();
+        setRectDragCurrent(coords);
+      }
+    }
+  };
+
+  const handleCanvasMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0) return;
+    if (placementMode === "rectangle" && rectDragStart && rectDragCurrent) {
+      const x = Math.min(rectDragStart.x, rectDragCurrent.x);
+      const y = Math.min(rectDragStart.y, rectDragCurrent.y);
+      const width = Math.abs(rectDragCurrent.x - rectDragStart.x);
+      const height = Math.abs(rectDragCurrent.y - rectDragStart.y);
+      if (width > 0.01 && height > 0.01) {
+        void addAnnotationWithGeometry(
+          { type: "rectangle", x, y, width, height },
+          "rectangle",
+          placementLabel || "New area"
+        );
+      }
+      setPlacementMode("none");
+      setRectDragStart(null);
+      setRectDragCurrent(null);
+    }
+  };
+
+  const addAnnotation = (annotationType: "point" | "rectangle", label: string) => {
+    if (placementMode !== "none") {
+      setPlacementMode("none");
+      setRectDragStart(null);
+      setRectDragCurrent(null);
+    }
+    setPlacementLabel(label);
+    setPlacementMode(annotationType);
   };
 
   const handleDeleteAnnotation = async (annotationId: string) => {
@@ -266,7 +377,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
 
   const loadSuggestions = useCallback(async () => {
     const list = await fetchSuggestions(sheetId);
-    setSuggestions(list.filter((s) => s.decision_state === "pending"));
+    setSuggestions(list);
   }, [sheetId]);
 
   const handleLayerVisibilityToggle = async (layer: LayerType) => {
@@ -284,6 +395,17 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     setSnapshots(s);
     setExports(e);
   }, [planSetId]);
+
+  useEffect(() => {
+    if (!rectDragStart || placementMode !== "rectangle") return;
+    const onGlobalMouseUp = () => {
+      setRectDragStart(null);
+      setRectDragCurrent(null);
+      setPlacementMode("none");
+    };
+    window.addEventListener("mouseup", onGlobalMouseUp);
+    return () => window.removeEventListener("mouseup", onGlobalMouseUp);
+  }, [rectDragStart, placementMode]);
 
   useEffect(() => {
     if (sheetId) void loadSuggestions();
@@ -330,8 +452,9 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const startEditingSuggestion = (s: AISuggestion) => {
     setEditingSuggestionId(s.id);
     setEditLabel(s.label || "");
-    setEditCategory("doors");
-    setEditUnit("count");
+    const { category, unit } = defaultCategoryUnitForSuggestion(s.label, s.suggestion_type);
+    setEditCategory(category);
+    setEditUnit(unit);
     setEditQuantity("1");
   };
 
@@ -348,6 +471,22 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       await loadSheetAndData();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to accept with edits.");
+    }
+  };
+
+  const handleBatchAccept = async () => {
+    setBatchAccepting(true);
+    setError("");
+    try {
+      const result = await batchAcceptSuggestions(sheetId, 0.85);
+      if (result.accepted_count > 0) {
+        await loadSuggestions();
+        await loadSheetAndData();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to batch accept.");
+    } finally {
+      setBatchAccepting(false);
     }
   };
 
@@ -407,15 +546,35 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       canvas.width = viewport.width;
       canvas.height = viewport.height;
       const renderContext = { canvasContext: ctx, viewport };
-      page.render(renderContext);
       const pw = viewport.width;
       const ph = viewport.height;
+      const drawOverlays = () => {
       const visibleLayers = layers.filter((l) => l.is_visible);
       const layerIds = new Set(visibleLayers.map((l) => l.id));
       const toDraw = annotations.filter((a) => layerIds.has(a.layer));
       toDraw.forEach((item) => drawAnnotation(ctx, item, pw, ph));
+      if (rectDragStart && rectDragCurrent) {
+        const x = Math.min(rectDragStart.x, rectDragCurrent.x);
+        const y = Math.min(rectDragStart.y, rectDragCurrent.y);
+        const width = Math.abs(rectDragCurrent.x - rectDragStart.x);
+        const height = Math.abs(rectDragCurrent.y - rectDragStart.y);
+        drawAnnotation(
+          ctx,
+          { geometry_json: { type: "rectangle", x, y, width, height }, label: "" },
+          pw,
+          ph,
+          "rgba(59, 130, 246, 0.3)"
+        );
+      }
+      };
+      const task = page.render(renderContext);
+      if (task.promise) {
+        task.promise.then(drawOverlays);
+      } else {
+        drawOverlays();
+      }
     });
-  }, [pdfDoc, scale, layers, annotations]);
+  }, [pdfDoc, scale, layers, annotations, rectDragStart, rectDragCurrent]);
 
   if (loading && !sheet) {
     return (
@@ -448,9 +607,20 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       <div
         ref={containerRef}
         className="sheet-viewer-canvas-wrap"
-        style={{ overflow: "auto", maxHeight: "70vh", cursor: isPanning ? "grabbing" : "grab" }}
+        style={{
+          overflow: "auto",
+          maxHeight: "70vh",
+          cursor:
+            placementMode !== "none"
+              ? placementMode === "point"
+                ? "crosshair"
+                : "crosshair"
+              : isPanning
+                ? "grabbing"
+                : "grab",
+        }}
         onMouseDown={(e) => {
-          if (e.button !== 0) return;
+          if (e.button !== 0 || placementMode !== "none") return;
           setIsPanning(true);
           panStartRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
         }}
@@ -462,7 +632,20 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         onMouseLeave={() => setIsPanning(false)}
       >
         <div style={{ transform: `translate(${pan.x}px, ${pan.y}px)`, display: "inline-block" }}>
-          <canvas ref={canvasRef} style={{ display: "block" }} />
+          <canvas
+            ref={canvasRef}
+            style={{ display: "block" }}
+            onMouseDown={handleCanvasMouseDown}
+            onMouseMove={handleCanvasMouseMove}
+            onMouseUp={handleCanvasMouseUp}
+            onMouseLeave={() => {
+              if (placementMode === "rectangle" && rectDragStart) {
+                setRectDragStart(null);
+                setRectDragCurrent(null);
+                setPlacementMode("none");
+              }
+            }}
+          />
         </div>
       </div>
       <div className="row sheet-viewer-sidebars">
@@ -537,13 +720,35 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           </div>
         </div>
       </div>
-      <div className="row sheet-viewer-annotation-tools">
-        <button type="button" onClick={() => void addAnnotation("point", "Point")} disabled={creating}>
+      <div className="row sheet-viewer-annotation-tools" style={{ alignItems: "center", gap: "0.5rem" }}>
+        <button
+          type="button"
+          onClick={() => addAnnotation("point", "Point")}
+          disabled={creating}
+          className={placementMode === "point" ? "selected" : ""}
+        >
           Add point
         </button>
-        <button type="button" onClick={() => void addAnnotation("rectangle", "New area")} disabled={creating}>
+        <button
+          type="button"
+          onClick={() => addAnnotation("rectangle", "New area")}
+          disabled={creating}
+          className={placementMode === "rectangle" ? "selected" : ""}
+        >
           Add rectangle
         </button>
+        {placementMode !== "none" && (
+          <span style={{ fontSize: "0.9rem", color: "#64748b" }}>
+            {placementMode === "point"
+              ? "Click on the plan to place a point"
+              : "Click and drag on the plan to draw a rectangle"}
+          </span>
+        )}
+        {placementMode !== "none" && (
+          <button type="button" onClick={() => setPlacementMode("none")}>
+            Cancel
+          </button>
+        )}
       </div>
       <div className="row sheet-viewer-sidebars">
         <div className="card" style={{ flex: "0 0 220px" }}>
@@ -597,6 +802,27 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
 
       <hr style={{ margin: "1.5rem 0" }} />
       <h4>AI suggestion review</h4>
+      <div style={{ marginBottom: "0.5rem" }}>
+        <span style={{ fontSize: "0.9rem", color: "#64748b", marginRight: "0.5rem" }}>Quick prompts:</span>
+        {[
+          "Find all doors",
+          "Identify windows",
+          "Highlight plumbing fixtures",
+          "Mark electrical fixtures",
+          "Shade concrete slab areas",
+          "Outline rooms",
+          "Find linear measurements",
+        ].map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            onClick={() => setAiPrompt(prompt)}
+            style={{ margin: "0.25rem 0.25rem 0.25rem 0", padding: "0.25rem 0.5rem", fontSize: "0.85rem" }}
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
       <div className="row">
         <input
           type="text"
@@ -612,9 +838,18 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       </div>
       {suggestions.length > 0 && (
         <>
-          <p className="empty-hint">
-            Pending: {suggestions.filter((s) => s.decision_state === "pending").length} · Accepted: {suggestions.filter((s) => s.decision_state === "accepted").length} · Rejected: {suggestions.filter((s) => s.decision_state === "rejected").length} · Edited: {suggestions.filter((s) => s.decision_state === "edited").length}
-          </p>
+          <div className="row" style={{ alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
+            <p className="empty-hint" style={{ margin: 0 }}>
+              Pending: {suggestions.filter((s) => s.decision_state === "pending").length} · Accepted: {suggestions.filter((s) => s.decision_state === "accepted").length} · Rejected: {suggestions.filter((s) => s.decision_state === "rejected").length} · Edited: {suggestions.filter((s) => s.decision_state === "edited").length}
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleBatchAccept()}
+              disabled={batchAccepting || suggestions.filter((s) => s.decision_state === "pending").length === 0}
+            >
+              {batchAccepting ? "Accepting…" : "Accept all high-confidence (≥85%)"}
+            </button>
+          </div>
           <ul style={{ listStyle: "none", padding: 0 }}>
             {[...suggestions]
               .sort((a, b) => (a.decision_state === "pending" ? (b.decision_state === "pending" ? 0 : -1) : b.decision_state === "pending" ? 1 : 0))
@@ -638,8 +873,12 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
                       <select value={editCategory} onChange={(e) => setEditCategory(e.target.value)} aria-label="Category">
                         <option value="doors">Doors</option>
                         <option value="windows">Windows</option>
+                        <option value="openings">Openings</option>
+                        <option value="rooms">Rooms</option>
                         <option value="plumbing_fixtures">Plumbing</option>
+                        <option value="electrical_fixtures">Electrical</option>
                         <option value="concrete_areas">Concrete</option>
+                        <option value="linear_measurements">Linear</option>
                         <option value="custom">Custom</option>
                       </select>
                       <input type="text" value={editQuantity} onChange={(e) => setEditQuantity(e.target.value)} placeholder="Qty" aria-label="Quantity" style={{ width: "4rem" }} />
@@ -647,6 +886,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
                         <option value="count">Count</option>
                         <option value="square_feet">SF</option>
                         <option value="linear_feet">LF</option>
+                        <option value="cubic_yards">CY</option>
                         <option value="each">Each</option>
                       </select>
                       <button type="button" onClick={() => void handleAcceptWithEdits(s.id)} disabled={creating}>Accept with edits</button>
