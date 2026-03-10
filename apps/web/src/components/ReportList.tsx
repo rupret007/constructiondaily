@@ -44,7 +44,7 @@ export function ReportList({
           >
             {projects.map((project) => (
               <option value={project.id} key={project.id}>
-                {project.code} — {project.name}
+                {project.code} - {project.name}
               </option>
             ))}
           </select>

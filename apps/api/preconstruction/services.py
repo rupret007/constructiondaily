@@ -175,6 +175,12 @@ def accept_suggestion(
                 category = default_cat
             if unit is None:
                 unit = default_unit
+        allowed_categories = {choice for choice, _ in TakeoffItem.Category.choices}
+        allowed_units = {choice for choice, _ in TakeoffItem.Unit.choices}
+        if category not in allowed_categories:
+            raise ValueError("Invalid category.")
+        if unit not in allowed_units:
+            raise ValueError("Invalid unit.")
 
         takeoff = TakeoffItem.objects.create(
             project_id=plan_sheet.project_id,

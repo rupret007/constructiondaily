@@ -7,7 +7,7 @@ from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -33,6 +33,7 @@ from .serializers import (
     AnnotationLayerSerializer,
     ExportRecordSerializer,
     PlanSetSerializer,
+    PlanSheetCreateSerializer,
     PlanSheetSerializer,
     RevisionSnapshotSerializer,
     TakeoffItemSerializer,
@@ -141,18 +142,22 @@ class PlanSheetViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Insufficient permissions.")
         if not user_has_project_role(request.user, str(plan_set.project_id), PROJECT_WRITE_ROLES):
             raise PermissionDenied("Insufficient permissions.")
-        try:
-            ext, mime_type, size = validate_plan_upload(file_obj)
-        except ValidationError as e:
-            return Response({"detail": str(e.detail)}, status=status.HTTP_400_BAD_REQUEST)
+        ext, _mime_type, _size = validate_plan_upload(file_obj)
+        payload = {}
+        for field in ("title", "sheet_number", "discipline", "sheet_index"):
+            if field in request.data:
+                payload[field] = request.data.get(field)
+        payload_serializer = PlanSheetCreateSerializer(data=payload)
+        payload_serializer.is_valid(raise_exception=True)
+        validated = payload_serializer.validated_data
         storage_key = store_plan_file(file_obj, str(plan_set.project_id), str(plan_set.id), ext)
         sheet = PlanSheet.objects.create(
             project=plan_set.project,
             plan_set=plan_set,
-            title=request.data.get("title", ""),
-            sheet_number=request.data.get("sheet_number", ""),
-            discipline=request.data.get("discipline", ""),
-            sheet_index=request.data.get("sheet_index", 0),
+            title=validated.get("title", ""),
+            sheet_number=validated.get("sheet_number", ""),
+            discipline=validated.get("discipline", ""),
+            sheet_index=validated.get("sheet_index", 0),
             storage_key=storage_key,
             created_by=request.user,
         )
@@ -413,6 +418,8 @@ class AISuggestionViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="accept")
     def accept(self, request, pk=None):
         suggestion = self.get_object()
+        if not user_has_project_role(request.user, str(suggestion.project_id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
         if suggestion.decision_state != AISuggestion.DecisionState.PENDING:
             return Response(
                 {"detail": "Suggestion has already been decided."},
@@ -439,6 +446,8 @@ class AISuggestionViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="reject")
     def reject(self, request, pk=None):
         suggestion = self.get_object()
+        if not user_has_project_role(request.user, str(suggestion.project_id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
         if suggestion.decision_state != AISuggestion.DecisionState.PENDING:
             return Response(
                 {"detail": "Suggestion has already been decided."},
@@ -468,7 +477,10 @@ class RevisionSnapshotViewSet(viewsets.ModelViewSet):
         if not user_has_project_role(self.request.user, str(plan_set.project_id), PROJECT_WRITE_ROLES):
             raise PermissionDenied("Insufficient permissions.")
         with transaction.atomic():
-            obj = serializer.save(created_by=self.request.user)
+            obj = serializer.save(
+                created_by=self.request.user,
+                status=RevisionSnapshot.Status.DRAFT,
+            )
             obj.snapshot_payload_json = build_snapshot_payload(plan_set)
             obj.save(update_fields=["snapshot_payload_json"])
             record_audit_event(
@@ -536,6 +548,12 @@ class ExportRecordViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Insufficient permissions.")
         if not user_has_project_role(request.user, str(plan_set.project_id), PROJECT_WRITE_ROLES):
             raise PermissionDenied("Insufficient permissions.")
+        allowed_export_types = {choice for choice, _ in ExportRecord.ExportType.choices}
+        if export_type not in allowed_export_types:
+            return Response(
+                {"detail": f"Invalid export_type '{export_type}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         revision_snapshot = None
         if revision_snapshot_id:
             revision_snapshot = get_object_or_404(

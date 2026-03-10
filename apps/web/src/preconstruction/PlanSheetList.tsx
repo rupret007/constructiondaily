@@ -61,7 +61,7 @@ export function PlanSheetList({
             className="hidden"
             disabled={uploading}
           />
-          {uploading ? "Uploading…" : "Upload PDF"}
+          {uploading ? "Uploading..." : "Upload PDF"}
         </label>
         <Button type="button" variant="outline" onClick={() => void onRefresh()} disabled={loading}>
           Refresh
@@ -71,7 +71,7 @@ export function PlanSheetList({
         <Alert variant="destructive">{uploadError}</Alert>
       )}
       {loading && sheets.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Loading sheets…</p>
+        <p className="text-sm text-muted-foreground">Loading sheets...</p>
       ) : sheets.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No sheets yet. Upload a PDF plan to get started.

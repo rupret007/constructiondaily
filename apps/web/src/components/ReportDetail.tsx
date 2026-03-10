@@ -51,7 +51,7 @@ export function ReportDetail({ report, onSave, onAction, onSyncWeather }: Props)
     <Card>
       <CardHeader>
         <CardTitle>
-          Report {report.report_date} — {report.status}
+          Report {report.report_date} - {report.status}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -97,7 +97,7 @@ export function ReportDetail({ report, onSave, onAction, onSyncWeather }: Props)
         </div>
         <p className="text-sm text-muted-foreground">
           Weather: {report.weather_summary || "No weather data"} {report.temperature_high_c ?? "-"} /{" "}
-          {report.temperature_low_c ?? "-"} °C, {report.precipitation_mm ?? "-"} mm rain
+          {report.temperature_low_c ?? "-"} C, {report.precipitation_mm ?? "-"} mm rain
         </p>
         {!!report.rejection_reason && (
           <Alert variant="destructive">Rejection: {report.rejection_reason}</Alert>

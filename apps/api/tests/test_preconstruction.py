@@ -119,6 +119,23 @@ class PreconstructionAPITests(TestCase):
             1,
         )
 
+    def test_plan_sheet_upload_invalid_sheet_index_rejected(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Sheets",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        pdf = BytesIO(MINIMAL_PDF)
+        pdf.name = "plan.pdf"
+        create_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "A-101", "sheet_index": "abc", "file": pdf},
+            format="multipart",
+        )
+        self.assertEqual(create_resp.status_code, 400)
+
     def test_annotation_layer_and_item(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(
@@ -169,6 +186,47 @@ class PreconstructionAPITests(TestCase):
             1,
         )
 
+    def test_annotation_create_rejects_cross_project_references(self):
+        self.client.login(username="estimator1", password="test-pass")
+        other_project = Project.objects.create(code="BID-2", name="Building B", location="Site Y")
+        ProjectMembership.objects.create(
+            user=self.user,
+            project=other_project,
+            role=ProjectMembership.Role.PROJECT_MANAGER,
+        )
+        other_set = PlanSet.objects.create(
+            project=other_project,
+            name="Other set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        other_sheet = PlanSheet.objects.create(
+            project=other_project,
+            plan_set=other_set,
+            storage_key="plans/test/sheet-b.pdf",
+            created_by=self.user,
+        )
+        other_layer = AnnotationLayer.objects.create(
+            project=other_project,
+            plan_set=other_set,
+            plan_sheet=other_sheet,
+            name="Other layer",
+            created_by=self.user,
+        )
+        ann_resp = self.client.post(
+            "/api/preconstruction/annotations/",
+            {
+                "project": str(self.project.id),
+                "plan_sheet": str(other_sheet.id),
+                "layer": str(other_layer.id),
+                "annotation_type": "rectangle",
+                "geometry_json": {"type": "rectangle", "x": 0.1, "y": 0.2, "width": 0.2, "height": 0.15},
+                "label": "Cross-project",
+            },
+            format="json",
+        )
+        self.assertEqual(ann_resp.status_code, 400)
+
     def test_takeoff_item(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(
@@ -202,6 +260,33 @@ class PreconstructionAPITests(TestCase):
             AuditEvent.objects.filter(event_type="delete_takeoff_item").count(),
             1,
         )
+
+    def test_takeoff_create_rejects_cross_project_references(self):
+        self.client.login(username="estimator1", password="test-pass")
+        other_project = Project.objects.create(code="BID-3", name="Building C", location="Site Z")
+        ProjectMembership.objects.create(
+            user=self.user,
+            project=other_project,
+            role=ProjectMembership.Role.PROJECT_MANAGER,
+        )
+        other_set = PlanSet.objects.create(
+            project=other_project,
+            name="Other set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        create_resp = self.client.post(
+            "/api/preconstruction/takeoff/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(other_set.id),
+                "category": "doors",
+                "unit": "count",
+                "quantity": "4",
+            },
+            format="json",
+        )
+        self.assertEqual(create_resp.status_code, 400)
 
     def test_ai_analysis_run_and_suggestions(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -336,6 +421,62 @@ class PreconstructionAPITests(TestCase):
         suggestion2.refresh_from_db()
         self.assertEqual(suggestion2.decision_state, AISuggestion.DecisionState.REJECTED)
 
+    def test_accept_and_reject_require_write_role(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        safety_user = User.objects.create_user(username="safety_limited", password="test-pass")
+        ProjectMembership.objects.create(
+            user=safety_user,
+            project=self.project,
+            role=ProjectMembership.Role.SAFETY,
+        )
+        self.client.logout()
+        self.client.login(username="safety_limited", password="test-pass")
+
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 403)
+
+        reject_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/reject/",
+            {},
+            format="json",
+        )
+        self.assertEqual(reject_resp.status_code, 403)
+
     def test_accept_suggestion_with_overrides_edited(self):
         """Accept with category/unit/quantity overrides sets EDITED and records edit_ai_suggestion."""
         self.client.login(username="estimator1", password="test-pass")
@@ -387,6 +528,94 @@ class PreconstructionAPITests(TestCase):
             AuditEvent.objects.filter(event_type="edit_ai_suggestion").count(),
             1,
         )
+
+    def test_accept_suggestion_invalid_category_rejected(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {"category": "not_a_real_category"},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 400)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.decision_state, AISuggestion.DecisionState.PENDING)
+        self.assertEqual(TakeoffItem.objects.filter(plan_sheet=plan_sheet).count(), 0)
+        self.assertEqual(AnnotationItem.objects.filter(plan_sheet=plan_sheet).count(), 0)
+
+    def test_accept_suggestion_invalid_unit_rejected(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {"unit": "not_a_real_unit"},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 400)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.decision_state, AISuggestion.DecisionState.PENDING)
+        self.assertEqual(TakeoffItem.objects.filter(plan_sheet=plan_sheet).count(), 0)
+        self.assertEqual(AnnotationItem.objects.filter(plan_sheet=plan_sheet).count(), 0)
 
     def test_batch_accept_suggestions(self):
         """Batch accept accepts only pending suggestions with confidence >= min_confidence."""
@@ -532,6 +761,73 @@ class PreconstructionAPITests(TestCase):
             1,
         )
 
+    def test_revision_snapshot_rejects_cross_project_references(self):
+        self.client.login(username="estimator1", password="test-pass")
+        other_project = Project.objects.create(code="BID-4", name="Building D", location="Site W")
+        ProjectMembership.objects.create(
+            user=self.user,
+            project=other_project,
+            role=ProjectMembership.Role.PROJECT_MANAGER,
+        )
+        other_set = PlanSet.objects.create(
+            project=other_project,
+            name="Other set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        snap_resp = self.client.post(
+            "/api/preconstruction/snapshots/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(other_set.id),
+                "name": "invalid",
+            },
+            format="json",
+        )
+        self.assertEqual(snap_resp.status_code, 400)
+
+    def test_revision_snapshot_create_forces_draft_status(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        snap_resp = self.client.post(
+            "/api/preconstruction/snapshots/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "name": "v1",
+                "status": "locked",
+            },
+            format="json",
+        )
+        self.assertEqual(snap_resp.status_code, 201)
+        self.assertEqual(snap_resp.json()["status"], RevisionSnapshot.Status.DRAFT)
+
+    def test_plan_set_update_cannot_change_project(self):
+        self.client.login(username="estimator1", password="test-pass")
+        other_project = Project.objects.create(code="BID-5", name="Building E", location="Site Q")
+        ProjectMembership.objects.create(
+            user=self.user,
+            project=other_project,
+            role=ProjectMembership.Role.PROJECT_MANAGER,
+        )
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        patch_resp = self.client.patch(
+            f"/api/preconstruction/sets/{plan_set.id}/",
+            {"project": str(other_project.id)},
+            format="json",
+        )
+        self.assertEqual(patch_resp.status_code, 400)
+
     def test_snapshot_payload_includes_learning_data(self):
         """Snapshot payload includes annotation/takeoff source and review_state, and AI suggestion outcomes."""
         plan_set = PlanSet.objects.create(
@@ -660,6 +956,22 @@ class PreconstructionAPITests(TestCase):
         self.assertIn("payload", export_resp.json())
         record = ExportRecord.objects.get(plan_set=plan_set, export_type="csv")
         self.assertEqual(record.status, ExportRecord.Status.GENERATED)
+
+    def test_export_invalid_type_rejected(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        export_resp = self.client.post(
+            "/api/preconstruction/exports/",
+            {"plan_set": str(plan_set.id), "export_type": "invalid_type"},
+            format="json",
+        )
+        self.assertEqual(export_resp.status_code, 400)
+        self.assertEqual(ExportRecord.objects.filter(plan_set=plan_set).count(), 0)
 
     def test_export_pdf_metadata_placeholder(self):
         self.client.login(username="estimator1", password="test-pass")

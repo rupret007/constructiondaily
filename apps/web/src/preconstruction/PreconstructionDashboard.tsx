@@ -56,12 +56,12 @@ export function PreconstructionDashboard({
         setSheets([]);
       }
     } catch (e) {
-      onClearError();
+      onError(e instanceof Error ? e.message : "Failed to load plan sets.");
       setPlanSets([]);
     } finally {
       setLoading(false);
     }
-  }, [projectId, selectedPlanSetId]);
+  }, [projectId, selectedPlanSetId, onError]);
 
   useEffect(() => {
     void loadPlanSets();
@@ -77,11 +77,12 @@ export function PreconstructionDashboard({
       const list = await fetchPlanSheets(selectedPlanSetId);
       setSheets(list);
     } catch (e) {
+      onError(e instanceof Error ? e.message : "Failed to load plan sheets.");
       setSheets([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedPlanSetId]);
+  }, [selectedPlanSetId, onError]);
 
   useEffect(() => {
     void loadSheets();
@@ -139,7 +140,7 @@ export function PreconstructionDashboard({
             >
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.code} — {p.name}
+                  {p.code} - {p.name}
                 </option>
               ))}
             </select>
@@ -178,7 +179,7 @@ export function PreconstructionDashboard({
                 </Button>
               )}
               {loading && planSets.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Loading…</p>
+                <p className="text-sm text-muted-foreground">Loading...</p>
               ) : (
                 <PlanSetList
                   planSets={planSets}

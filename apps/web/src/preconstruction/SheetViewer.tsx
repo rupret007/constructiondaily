@@ -60,6 +60,10 @@ function normToScreen(
   return { x: x * pageWidth, y: y * pageHeight };
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** Derive default category and unit from suggestion label/type (mirrors backend mapping). */
 function defaultCategoryUnitForSuggestion(
   label: string | null | undefined,
@@ -85,7 +89,8 @@ function defaultCategoryUnitForSuggestion(
   };
   if (labelLower && labelLower in map) return map[labelLower];
   for (const [key, value] of Object.entries(map)) {
-    if (labelLower.includes(key) || key.includes(labelLower)) return value;
+    const pattern = new RegExp(`\\b${escapeRegExp(key)}\\b`);
+    if (pattern.test(labelLower)) return value;
   }
   if (suggestionType === "polygon") return { category: "concrete_areas", unit: "square_feet" };
   return { category: "custom", unit: "count" };
@@ -580,7 +585,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     return (
       <section className="card">
         <button type="button" onClick={onBack}>Back to plan set</button>
-        <p>Loading sheet…</p>
+        <p>Loading sheet...</p>
       </section>
     );
   }
@@ -599,7 +604,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       <div className="row">
         <button type="button" onClick={onBack}>Back to plan set</button>
         <span>Zoom:</span>
-        <button type="button" onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}>−</button>
+        <button type="button" onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}>-</button>
         <span>{Math.round(scale * 100)}%</span>
         <button type="button" onClick={() => setScale((s) => Math.min(3, s + 0.2))}>+</button>
       </div>
@@ -780,8 +785,8 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
             return (
               <div>
                 <p><strong>Type:</strong> {ann.annotation_type}</p>
-                <p><strong>Label:</strong> {ann.label || "—"}</p>
-                <p><strong>Notes:</strong> {ann.notes || "—"}</p>
+                <p><strong>Label:</strong> {ann.label || "-"}</p>
+                <p><strong>Notes:</strong> {ann.notes || "-"}</p>
                 <p><strong>Source:</strong> {ann.source}</p>
                 <p><strong>Review state:</strong> {ann.review_state}</p>
                 <div className="row">
@@ -833,21 +838,21 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           style={{ flex: 1, minWidth: "12rem" }}
         />
         <button type="button" onClick={() => void handleRunAnalysis()} disabled={aiRunning}>
-          {aiRunning ? "Running…" : "Run analysis"}
+          {aiRunning ? "Running..." : "Run analysis"}
         </button>
       </div>
       {suggestions.length > 0 && (
         <>
           <div className="row" style={{ alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
             <p className="empty-hint" style={{ margin: 0 }}>
-              Pending: {suggestions.filter((s) => s.decision_state === "pending").length} · Accepted: {suggestions.filter((s) => s.decision_state === "accepted").length} · Rejected: {suggestions.filter((s) => s.decision_state === "rejected").length} · Edited: {suggestions.filter((s) => s.decision_state === "edited").length}
+              Pending: {suggestions.filter((s) => s.decision_state === "pending").length} | Accepted: {suggestions.filter((s) => s.decision_state === "accepted").length} | Rejected: {suggestions.filter((s) => s.decision_state === "rejected").length} | Edited: {suggestions.filter((s) => s.decision_state === "edited").length}
             </p>
             <button
               type="button"
               onClick={() => void handleBatchAccept()}
               disabled={batchAccepting || suggestions.filter((s) => s.decision_state === "pending").length === 0}
             >
-              {batchAccepting ? "Accepting…" : "Accept all high-confidence (≥85%)"}
+              {batchAccepting ? "Accepting..." : "Accept all high-confidence (>=85%)"}
             </button>
           </div>
           <ul style={{ listStyle: "none", padding: 0 }}>
@@ -901,7 +906,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
                           <button type="button" onClick={() => startEditingSuggestion(s)}>Edit</button>
                         </>
                       ) : (
-                        <span aria-label="Decision outcome">— {s.decision_state}</span>
+                        <span aria-label="Decision outcome">- {s.decision_state}</span>
                       )}
                       {s.decided_at && <span style={{ marginLeft: "0.25rem", fontSize: "0.85rem" }}>({s.decided_at.slice(0, 10)})</span>}
                     </span>
@@ -948,7 +953,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       )}
       {exportPayload != null && (
         <pre style={{ background: "#f1f5f9", padding: "0.75rem", overflow: "auto", maxHeight: "200px", fontSize: "0.85rem" }}>
-          {exportPayload.slice(0, 3000)}{exportPayload.length > 3000 ? "…" : ""}
+          {exportPayload.slice(0, 3000)}{exportPayload.length > 3000 ? "..." : ""}
         </pre>
       )}
     </section>

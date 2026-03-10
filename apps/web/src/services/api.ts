@@ -5,24 +5,32 @@ function getCookie(name: string): string {
   return cookie ? decodeURIComponent(cookie.split("=")[1]) : "";
 }
 
-function messageFromJson(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "";
-  const record = payload as Record<string, unknown>;
-  if (typeof record.detail === "string") {
-    return record.detail;
+function firstErrorString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const message = firstErrorString(item);
+      if (message) return message;
+    }
+    return "";
   }
-  if (typeof record.non_field_errors === "string") {
-    return record.non_field_errors;
+  if (!value || typeof value !== "object") return "";
+
+  const record = value as Record<string, unknown>;
+  const priorityFields = ["detail", "non_field_errors", "message", "error"];
+  for (const field of priorityFields) {
+    const message = firstErrorString(record[field]);
+    if (message) return message;
   }
-  if (Array.isArray(record.non_field_errors)) {
-    const first = record.non_field_errors.find((item) => typeof item === "string");
-    return typeof first === "string" ? first : "";
-  }
-  const firstStringField = Object.values(record).find((item) => typeof item === "string");
-  if (typeof firstStringField === "string") {
-    return firstStringField;
+  for (const nested of Object.values(record)) {
+    const message = firstErrorString(nested);
+    if (message) return message;
   }
   return "";
+}
+
+function messageFromJson(payload: unknown): string {
+  return firstErrorString(payload);
 }
 
 export async function apiRequest<T>(endpoint: string, init: RequestInit = {}): Promise<T> {

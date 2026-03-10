@@ -44,6 +44,11 @@ class PlanSetSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("created_at", "updated_at")
 
+    def validate(self, attrs):
+        if self.instance and "project" in attrs and attrs["project"].id != self.instance.project_id:
+            raise serializers.ValidationError("Project cannot be changed after plan set creation.")
+        return attrs
+
 
 class PlanSheetSerializer(serializers.ModelSerializer):
     created_by = PreconstructionUserSlimSerializer(read_only=True)
@@ -68,7 +73,7 @@ class PlanSheetSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("storage_key", "parse_status", "created_at", "updated_at")
+        read_only_fields = ("project", "plan_set", "storage_key", "parse_status", "created_at", "updated_at")
 
 
 class PlanSheetCreateSerializer(serializers.ModelSerializer):
@@ -100,6 +105,27 @@ class AnnotationLayerSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("created_at", "updated_at")
 
+    def validate(self, attrs):
+        if self.instance:
+            if "project" in attrs and attrs["project"].id != self.instance.project_id:
+                raise serializers.ValidationError("Project cannot be changed after creation.")
+            if "plan_set" in attrs and attrs["plan_set"].id != self.instance.plan_set_id:
+                raise serializers.ValidationError("Plan set cannot be changed after creation.")
+            if "plan_sheet" in attrs and attrs["plan_sheet"].id != self.instance.plan_sheet_id:
+                raise serializers.ValidationError("Plan sheet cannot be changed after creation.")
+
+        project = attrs.get("project") or getattr(self.instance, "project", None)
+        plan_set = attrs.get("plan_set") or getattr(self.instance, "plan_set", None)
+        plan_sheet = attrs.get("plan_sheet") or getattr(self.instance, "plan_sheet", None)
+
+        if project and plan_set and plan_set.project_id != project.id:
+            raise serializers.ValidationError("Plan set must belong to the selected project.")
+        if project and plan_sheet and plan_sheet.project_id != project.id:
+            raise serializers.ValidationError("Plan sheet must belong to the selected project.")
+        if plan_set and plan_sheet and plan_sheet.plan_set_id != plan_set.id:
+            raise serializers.ValidationError("Plan sheet must belong to the selected plan set.")
+        return attrs
+
 
 class AnnotationItemSerializer(serializers.ModelSerializer):
     created_by = PreconstructionUserSlimSerializer(read_only=True)
@@ -126,6 +152,27 @@ class AnnotationItemSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("created_at", "updated_at")
+
+    def validate(self, attrs):
+        if self.instance:
+            if "project" in attrs and attrs["project"].id != self.instance.project_id:
+                raise serializers.ValidationError("Project cannot be changed after creation.")
+            if "plan_sheet" in attrs and attrs["plan_sheet"].id != self.instance.plan_sheet_id:
+                raise serializers.ValidationError("Plan sheet cannot be changed after creation.")
+            if "layer" in attrs and attrs["layer"].id != self.instance.layer_id:
+                raise serializers.ValidationError("Layer cannot be changed after creation.")
+
+        project = attrs.get("project") or getattr(self.instance, "project", None)
+        plan_sheet = attrs.get("plan_sheet") or getattr(self.instance, "plan_sheet", None)
+        layer = attrs.get("layer") or getattr(self.instance, "layer", None)
+
+        if project and plan_sheet and plan_sheet.project_id != project.id:
+            raise serializers.ValidationError("Plan sheet must belong to the selected project.")
+        if project and layer and layer.project_id != project.id:
+            raise serializers.ValidationError("Layer must belong to the selected project.")
+        if plan_sheet and layer and layer.plan_sheet_id != plan_sheet.id:
+            raise serializers.ValidationError("Layer must belong to the selected plan sheet.")
+        return attrs
 
 
 class TakeoffItemSerializer(serializers.ModelSerializer):
@@ -155,6 +202,31 @@ class TakeoffItemSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("created_at", "updated_at")
+
+    def validate(self, attrs):
+        if self.instance:
+            if "project" in attrs and attrs["project"].id != self.instance.project_id:
+                raise serializers.ValidationError("Project cannot be changed after creation.")
+            if "plan_set" in attrs and attrs["plan_set"].id != self.instance.plan_set_id:
+                raise serializers.ValidationError("Plan set cannot be changed after creation.")
+            if "plan_sheet" in attrs:
+                incoming_sheet = attrs.get("plan_sheet")
+                incoming_sheet_id = incoming_sheet.id if incoming_sheet else None
+                if incoming_sheet_id != self.instance.plan_sheet_id:
+                    raise serializers.ValidationError("Plan sheet cannot be changed after creation.")
+
+        project = attrs.get("project") or getattr(self.instance, "project", None)
+        plan_set = attrs.get("plan_set") or getattr(self.instance, "plan_set", None)
+        plan_sheet = attrs.get("plan_sheet") if "plan_sheet" in attrs else getattr(self.instance, "plan_sheet", None)
+
+        if project and plan_set and plan_set.project_id != project.id:
+            raise serializers.ValidationError("Plan set must belong to the selected project.")
+        if plan_sheet:
+            if project and plan_sheet.project_id != project.id:
+                raise serializers.ValidationError("Plan sheet must belong to the selected project.")
+            if plan_set and plan_sheet.plan_set_id != plan_set.id:
+                raise serializers.ValidationError("Plan sheet must belong to the selected plan set.")
+        return attrs
 
 
 class AIAnalysisRunSerializer(serializers.ModelSerializer):
@@ -227,7 +299,20 @@ class RevisionSnapshotSerializer(serializers.ModelSerializer):
             "created_by",
             "created_at",
         )
-        read_only_fields = ("snapshot_payload_json", "created_at")
+        read_only_fields = ("status", "snapshot_payload_json", "created_at")
+
+    def validate(self, attrs):
+        if self.instance:
+            if "project" in attrs and attrs["project"].id != self.instance.project_id:
+                raise serializers.ValidationError("Project cannot be changed after creation.")
+            if "plan_set" in attrs and attrs["plan_set"].id != self.instance.plan_set_id:
+                raise serializers.ValidationError("Plan set cannot be changed after creation.")
+
+        project = attrs.get("project") or getattr(self.instance, "project", None)
+        plan_set = attrs.get("plan_set") or getattr(self.instance, "plan_set", None)
+        if project and plan_set and plan_set.project_id != project.id:
+            raise serializers.ValidationError("Plan set must belong to the selected project.")
+        return attrs
 
 
 class ExportRecordSerializer(serializers.ModelSerializer):

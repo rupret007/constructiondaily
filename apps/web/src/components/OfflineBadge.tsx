@@ -8,10 +8,10 @@ type Props = {
 
 export function OfflineBadge({ isOnline, lastFlushedCount, queuedCount }: Props) {
   const message = isOnline
-    ? `Online${lastFlushedCount ? ` — synced ${lastFlushedCount} changes` : ""}${
+    ? `Online${lastFlushedCount ? ` - synced ${lastFlushedCount} changes` : ""}${
         queuedCount ? ` (${queuedCount} pending)` : ""
       }`
-    : `Offline — ${queuedCount} queued changes`;
+    : `Offline - ${queuedCount} queued changes`;
 
   return (
     <Alert
