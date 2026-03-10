@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -25,7 +25,7 @@ class AttachmentViewSet(viewsets.ModelViewSet):
     serializer_class = AttachmentSerializer
     queryset = Attachment.objects.select_related("report", "uploaded_by")
     permission_classes = [IsAuthenticated]
-    http_method_names = ["get", "post", "delete", "patch"]
+    http_method_names = ["get", "post", "delete", "head", "options"]
     filterset_fields = ("report", "scan_status")
 
     def get_queryset(self):
@@ -51,26 +51,6 @@ class AttachmentViewSet(viewsets.ModelViewSet):
             return result
         serializer = self.get_serializer(result)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    def perform_update(self, serializer):
-        attachment = serializer.instance
-        report = attachment.report
-        if report.status == DailyReport.Status.LOCKED:
-            raise PermissionDenied("Locked reports cannot be changed.")
-        if not _can_upload_to_project(self.request.user, str(report.project_id)):
-            raise PermissionDenied("Insufficient permissions.")
-        incoming_report = serializer.validated_data.get("report", report)
-        if incoming_report.id != report.id:
-            raise ValidationError("Report cannot be changed after upload.")
-        serializer.save()
-        record_audit_event(
-            actor=self.request.user,
-            event_type="attachment.updated",
-            object_type="Attachment",
-            object_id=str(attachment.id),
-            project_id=str(attachment.report.project_id),
-            metadata={},
-        )
 
     def perform_destroy(self, instance):
         if instance.report.status == DailyReport.Status.LOCKED:

@@ -167,6 +167,7 @@ class DailyReportViewSet(viewsets.ModelViewSet):
             ip_address=ip_address,
             user_agent=user_agent,
             reason=serializer.validated_data.get("reason", ""),
+            signature_intent=serializer.validated_data.get("signature_intent", ""),
         )
         return Response(ReportSummarySerializer(updated).data)
 
@@ -191,6 +192,18 @@ class DailyReportViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="sync-weather")
     def sync_weather(self, request, pk=None):
         report = self.get_object()
+        if report.status == DailyReport.Status.LOCKED:
+            raise PermissionDenied("Locked reports cannot be edited.")
+        if not user_has_project_role(
+            request.user,
+            str(report.project_id),
+            (
+                ProjectMembership.Role.FOREMAN,
+                ProjectMembership.Role.SUPERINTENDENT,
+                ProjectMembership.Role.ADMIN,
+            ),
+        ):
+            raise PermissionDenied("Insufficient permissions.")
         project = report.project
         if project.latitude is None or project.longitude is None:
             return Response({"detail": "Project coordinates are required to sync weather."}, status=400)

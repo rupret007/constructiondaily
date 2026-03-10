@@ -113,7 +113,7 @@ class IntegrityGuardTests(TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertTrue(Attachment.objects.filter(id=attachment.id).exists())
 
-    def test_attachment_update_rejects_report_reassignment(self):
+    def test_attachment_update_endpoint_disabled(self):
         attachment = self._create_attachment()
         self.client.login(username="integrity_super", password="test-pass")
         response = self.client.patch(
@@ -121,7 +121,7 @@ class IntegrityGuardTests(TestCase):
             {"report": str(self.report_b.id)},
             format="json",
         )
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 405)
         attachment.refresh_from_db()
         self.assertEqual(attachment.report_id, self.report_a.id)
 

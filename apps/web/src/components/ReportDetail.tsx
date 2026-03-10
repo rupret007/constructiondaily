@@ -122,7 +122,7 @@ export function ReportDetail({ report, onSave, onAction, onSyncWeather }: Props)
           <Button
             size="sm"
             variant="secondary"
-            disabled={report.status !== "submitted"}
+            disabled={report.status !== "submitted" && report.status !== "reviewed"}
             onClick={() => void onAction("reject", reason)}
           >
             Reject

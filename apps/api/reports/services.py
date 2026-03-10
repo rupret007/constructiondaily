@@ -27,7 +27,15 @@ def _report_hash_payload(report: DailyReport) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def transition_report(report: DailyReport, action: str, actor, ip_address: str | None, user_agent: str, reason: str = ""):
+def transition_report(
+    report: DailyReport,
+    action: str,
+    actor,
+    ip_address: str | None,
+    user_agent: str,
+    reason: str = "",
+    signature_intent: str = "",
+):
     role_lookup = {
         "submit": (ProjectMembership.Role.FOREMAN, ProjectMembership.Role.SUPERINTENDENT, ProjectMembership.Role.ADMIN),
         "review": (ProjectMembership.Role.PROJECT_MANAGER, ProjectMembership.Role.ADMIN),
@@ -45,21 +53,21 @@ def transition_report(report: DailyReport, action: str, actor, ip_address: str |
         raise ValidationError("Locked reports cannot be transitioned.")
 
     expected = {
-        "submit": DailyReport.Status.DRAFT,
-        "review": DailyReport.Status.SUBMITTED,
-        "reject": DailyReport.Status.SUBMITTED,
-        "approve": DailyReport.Status.REVIEWED,
-        "lock": DailyReport.Status.APPROVED,
-        "sign": DailyReport.Status.APPROVED,
+        "submit": {DailyReport.Status.DRAFT},
+        "review": {DailyReport.Status.SUBMITTED},
+        "reject": {DailyReport.Status.SUBMITTED, DailyReport.Status.REVIEWED},
+        "approve": {DailyReport.Status.REVIEWED},
+        "lock": {DailyReport.Status.APPROVED},
+        "sign": {DailyReport.Status.APPROVED},
     }
-    if report.status != expected[action]:
+    if report.status not in expected[action]:
         raise ValidationError(f"Cannot {action} report while in '{report.status}'.")
 
     with transaction.atomic():
         report = DailyReport.objects.select_for_update().get(pk=report.pk)
         if report.status == DailyReport.Status.LOCKED and action != "sign":
             raise ValidationError("Locked reports cannot be transitioned.")
-        if report.status != expected[action]:
+        if report.status not in expected[action]:
             raise ValidationError(f"Cannot {action} report while in '{report.status}'.")
         if action == "submit":
             report.status = DailyReport.Status.SUBMITTED
@@ -79,6 +87,10 @@ def transition_report(report: DailyReport, action: str, actor, ip_address: str |
         report.revision += 1
         report.save(update_fields=["status", "rejection_reason", "locked_at", "locked_by", "revision", "updated_at"])
 
+        persisted_signature_intent = ""
+        if action in {"approve", "sign"}:
+            persisted_signature_intent = (signature_intent or "").strip() or "I acknowledge and approve this report."
+
         approval_action = ApprovalAction.objects.create(
             report=report,
             actor=actor,
@@ -87,7 +99,7 @@ def transition_report(report: DailyReport, action: str, actor, ip_address: str |
             document_hash=_report_hash_payload(report),
             actor_ip=ip_address,
             actor_user_agent=user_agent[:255],
-            signature_intent="I acknowledge and approve this report." if action in {"approve", "sign"} else "",
+            signature_intent=persisted_signature_intent,
         )
 
         snapshot_path = ""
