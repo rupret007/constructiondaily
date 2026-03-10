@@ -88,6 +88,22 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(reject_response.status_code, 200)
         self.assertEqual(reject_response.json()["status"], "draft")
 
+    def test_reject_requires_reason(self):
+        report_id = self._create_report()
+
+        self.client.login(username="super1", password="test-pass")
+        submit_response = self.client.post(f"/api/reports/daily/{report_id}/submit/", {}, format="json")
+        self.assertEqual(submit_response.status_code, 200)
+        self.client.logout()
+
+        self.client.login(username="pm1", password="test-pass")
+        reject_response = self.client.post(
+            f"/api/reports/daily/{report_id}/reject/",
+            {"reason": "   "},
+            format="json",
+        )
+        self.assertEqual(reject_response.status_code, 400)
+
     def test_sync_weather_requires_write_role(self):
         report_id = self._create_report()
         safety_user = User.objects.create_user(username="safety1", password="test-pass")

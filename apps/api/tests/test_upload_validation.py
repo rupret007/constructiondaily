@@ -63,3 +63,14 @@ class UploadValidationTests(TestCase):
             format="multipart",
         )
         self.assertEqual(upload_response.status_code, 201)
+
+    def test_upload_intent_rejected_for_locked_report(self):
+        self.report.status = DailyReport.Status.LOCKED
+        self.report.save(update_fields=["status", "updated_at"])
+        self.client.login(username="super2", password="test-pass")
+        intent_response = self.client.post(
+            "/api/files/intents/",
+            {"report": str(self.report.id), "max_size_bytes": 1024 * 1024},
+            format="json",
+        )
+        self.assertEqual(intent_response.status_code, 400)

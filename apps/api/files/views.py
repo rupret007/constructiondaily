@@ -122,6 +122,8 @@ class UploadIntentViewSet(viewsets.ModelViewSet):
         if not report_id:
             return Response({"detail": "Report is required."}, status=status.HTTP_400_BAD_REQUEST)
         report = get_object_or_404(DailyReport, id=report_id)
+        if report.status == DailyReport.Status.LOCKED:
+            return Response({"detail": "Cannot create upload intent for locked report."}, status=status.HTTP_400_BAD_REQUEST)
         if not _can_upload_to_project(request.user, str(report.project_id)):
             return Response({"detail": "Insufficient permissions."}, status=status.HTTP_403_FORBIDDEN)
 

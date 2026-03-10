@@ -36,6 +36,7 @@ def transition_report(
     reason: str = "",
     signature_intent: str = "",
 ):
+    reason = (reason or "").strip()
     role_lookup = {
         "submit": (ProjectMembership.Role.FOREMAN, ProjectMembership.Role.SUPERINTENDENT, ProjectMembership.Role.ADMIN),
         "review": (ProjectMembership.Role.PROJECT_MANAGER, ProjectMembership.Role.ADMIN),
@@ -47,6 +48,8 @@ def transition_report(
     allowed_roles = role_lookup.get(action)
     if not allowed_roles:
         raise ValidationError("Invalid transition action.")
+    if action == "reject" and not reason:
+        raise ValidationError("Rejection reason is required.")
     if not user_has_project_role(actor, str(report.project_id), allowed_roles):
         raise PermissionDenied("You do not have permission to perform this action.")
     if report.status == DailyReport.Status.LOCKED and action != "sign":
