@@ -323,6 +323,44 @@ class PreconstructionAPITests(TestCase):
             1,
         )
 
+    def test_direct_suggestion_create_not_allowed(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        create_resp = self.client.post(
+            "/api/preconstruction/suggestions/",
+            {
+                "analysis_run": str(run.id),
+                "project": str(self.project.id),
+                "plan_sheet": str(plan_sheet.id),
+                "suggestion_type": "rectangle",
+                "geometry_json": {"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+                "label": "Manual injection",
+            },
+            format="json",
+        )
+        self.assertEqual(create_resp.status_code, 405)
+        self.assertEqual(AISuggestion.objects.filter(analysis_run=run).count(), 0)
+
     def test_ai_analysis_deterministic(self):
         """Same sheet + prompt produces same suggestions (mock provider)."""
         plan_set = PlanSet.objects.create(

@@ -386,6 +386,12 @@ class AISuggestionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(project_id__in=_project_ids_for_user(self.request.user))
 
+    def create(self, request, *args, **kwargs):
+        return Response(
+            {"detail": "Direct suggestion creation is not allowed."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
     @action(detail=False, methods=["post"], url_path="batch_accept")
     def batch_accept(self, request):
         plan_sheet_id = request.data.get("plan_sheet")
