@@ -34,14 +34,19 @@ class ProjectSerializer(serializers.ModelSerializer):
 
 class ProjectMembershipSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
-    user_id = serializers.IntegerField(write_only=True)
+    user_id = serializers.PrimaryKeyRelatedField(queryset=User.objects.all(), write_only=True, source="user")
 
     class Meta:
         model = ProjectMembership
         fields = ("id", "project", "user", "user_id", "role", "is_active", "created_at", "updated_at")
         read_only_fields = ("created_at", "updated_at")
 
-    def create(self, validated_data):
-        user_id = validated_data.pop("user_id")
-        validated_data["user_id"] = user_id
-        return super().create(validated_data)
+    def validate(self, attrs):
+        if self.instance:
+            incoming_project = attrs.get("project", self.instance.project)
+            incoming_user = attrs.get("user", self.instance.user)
+            if incoming_project.id != self.instance.project_id:
+                raise serializers.ValidationError("Project cannot be changed after membership creation.")
+            if incoming_user.id != self.instance.user_id:
+                raise serializers.ValidationError("User cannot be changed after membership creation.")
+        return attrs

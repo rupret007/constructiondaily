@@ -107,6 +107,16 @@ class ProjectMembershipViewSet(
     filterset_fields = ("project", "role", "is_active")
     ordering_fields = ("created_at", "updated_at")
 
+    def _can_manage_memberships(self, project_id: str) -> bool:
+        if self.request.user.is_superuser:
+            return True
+        return ProjectMembership.objects.filter(
+            user=self.request.user,
+            project_id=project_id,
+            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.PROJECT_MANAGER],
+            is_active=True,
+        ).exists()
+
     def get_queryset(self):
         user = self.request.user
         if user.is_superuser:
@@ -120,16 +130,26 @@ class ProjectMembershipViewSet(
 
     def perform_create(self, serializer):
         project = serializer.validated_data["project"]
-        if not ProjectMembership.objects.filter(
-            user=self.request.user,
-            project=project,
-            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.PROJECT_MANAGER],
-            is_active=True,
-        ).exists():
+        if not self._can_manage_memberships(str(project.id)):
             from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied("Admin or Project Manager role is required.")
         serializer.save()
+
+    def perform_update(self, serializer):
+        membership = self.get_object()
+        if not self._can_manage_memberships(str(membership.project_id)):
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("Admin or Project Manager role is required.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not self._can_manage_memberships(str(instance.project_id)):
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("Admin or Project Manager role is required.")
+        instance.delete()
 
 
 class UserDirectoryViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
