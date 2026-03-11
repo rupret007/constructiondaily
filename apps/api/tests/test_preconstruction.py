@@ -136,6 +136,80 @@ class PreconstructionAPITests(TestCase):
         )
         self.assertEqual(create_resp.status_code, 400)
 
+    def test_plan_sheet_update_and_delete_are_audited(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Sheets",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="A-100",
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+
+        patch_resp = self.client.patch(
+            f"/api/preconstruction/sheets/{sheet.id}/",
+            {"title": "A-100 Revised"},
+            format="json",
+        )
+        self.assertEqual(patch_resp.status_code, 200)
+        sheet.refresh_from_db()
+        self.assertEqual(sheet.title, "A-100 Revised")
+        self.assertGreaterEqual(
+            AuditEvent.objects.filter(event_type="update_plan_sheet", object_id=str(sheet.id)).count(),
+            1,
+        )
+
+        delete_resp = self.client.delete(f"/api/preconstruction/sheets/{sheet.id}/")
+        self.assertEqual(delete_resp.status_code, 204)
+        self.assertFalse(PlanSheet.objects.filter(id=sheet.id).exists())
+        self.assertGreaterEqual(
+            AuditEvent.objects.filter(event_type="delete_plan_sheet", object_id=str(sheet.id)).count(),
+            1,
+        )
+
+    def test_plan_sheet_update_and_delete_require_write_role(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Sheets",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="A-200",
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        safety_user = User.objects.create_user(username="safety_view_only", password="test-pass")
+        ProjectMembership.objects.create(
+            user=safety_user,
+            project=self.project,
+            role=ProjectMembership.Role.SAFETY,
+        )
+        self.client.logout()
+        self.client.login(username="safety_view_only", password="test-pass")
+
+        patch_resp = self.client.patch(
+            f"/api/preconstruction/sheets/{sheet.id}/",
+            {"title": "Unauthorized edit"},
+            format="json",
+        )
+        self.assertEqual(patch_resp.status_code, 403)
+
+        delete_resp = self.client.delete(f"/api/preconstruction/sheets/{sheet.id}/")
+        self.assertEqual(delete_resp.status_code, 403)
+        self.assertTrue(PlanSheet.objects.filter(id=sheet.id).exists())
+        sheet.refresh_from_db()
+        self.assertEqual(sheet.title, "A-200")
+
     def test_annotation_layer_and_item(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(

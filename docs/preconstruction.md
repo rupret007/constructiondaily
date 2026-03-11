@@ -48,7 +48,7 @@ Preconstruction supports plan-set management, PDF sheet upload, on-sheet annotat
 Base path: `/api/preconstruction/`
 
 - `sets/`: create/list/retrieve/update/delete plan sets
-- `sheets/`: upload/list/retrieve/update plan sheets
+- `sheets/`: upload/list/retrieve/update/delete plan sheets
 - `sheets/{id}/file/`: serve sheet PDF
 - `layers/`: annotation layers
 - `annotations/`: annotation CRUD

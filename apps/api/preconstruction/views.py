@@ -172,6 +172,33 @@ class PlanSheetViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(sheet)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    def perform_update(self, serializer):
+        obj = self.get_object()
+        if not user_has_project_role(self.request.user, str(obj.project_id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
+        serializer.save()
+        record_audit_event(
+            actor=self.request.user,
+            event_type="update_plan_sheet",
+            object_type="PlanSheet",
+            object_id=str(obj.id),
+            project_id=str(obj.project_id),
+            metadata={},
+        )
+
+    def perform_destroy(self, instance):
+        if not user_has_project_role(self.request.user, str(instance.project_id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
+        record_audit_event(
+            actor=self.request.user,
+            event_type="delete_plan_sheet",
+            object_type="PlanSheet",
+            object_id=str(instance.id),
+            project_id=str(instance.project_id),
+            metadata={"plan_set_id": str(instance.plan_set_id)},
+        )
+        instance.delete()
+
     @action(detail=True, methods=["get"], url_path="file")
     def file(self, request, pk=None):
         """Serve the plan sheet PDF with permission check."""
