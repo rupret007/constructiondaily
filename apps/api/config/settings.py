@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -11,6 +12,25 @@ DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY") or secrets.token_urlsafe(64)
 
 ALLOWED_HOSTS = [host for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if host]
+
+
+def _database_config_from_url(url: str) -> dict[str, object]:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"postgres", "postgresql"}:
+        raise ValueError("DATABASE_URL must be a PostgreSQL URL.")
+    db_name = unquote(parsed.path.lstrip("/"))
+    if not db_name:
+        raise ValueError("DATABASE_URL must include a database name.")
+    query_params = parse_qs(parsed.query)
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": db_name,
+        "USER": unquote(parsed.username or "") or os.getenv("POSTGRES_USER", ""),
+        "PASSWORD": unquote(parsed.password or "") or os.getenv("POSTGRES_PASSWORD", ""),
+        "HOST": parsed.hostname or os.getenv("POSTGRES_HOST", "localhost"),
+        "PORT": str(parsed.port or os.getenv("POSTGRES_PORT", "5432")),
+        "OPTIONS": {k: v[0] for k, v in query_params.items() if v},
+    }
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -64,18 +84,7 @@ ASGI_APPLICATION = "config.asgi.application"
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL:
-    if not DATABASE_URL.startswith("postgres"):
-        raise ValueError("DATABASE_URL must be a PostgreSQL URL.")
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": DATABASE_URL.rsplit("/", 1)[-1].split("?")[0],
-            "USER": os.getenv("POSTGRES_USER", ""),
-            "PASSWORD": os.getenv("POSTGRES_PASSWORD", ""),
-            "HOST": os.getenv("POSTGRES_HOST", "localhost"),
-            "PORT": os.getenv("POSTGRES_PORT", "5432"),
-        }
-    }
+    DATABASES = {"default": _database_config_from_url(DATABASE_URL)}
 else:
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
 

@@ -46,6 +46,9 @@ export function ReportDetail({ report, onSave, onAction, onSyncWeather }: Props)
   }
 
   const canEdit = report.status !== "locked";
+  const canReject =
+    (report.status === "submitted" || report.status === "reviewed") &&
+    reason.trim().length > 0;
 
   return (
     <Card>
@@ -122,7 +125,7 @@ export function ReportDetail({ report, onSave, onAction, onSyncWeather }: Props)
           <Button
             size="sm"
             variant="secondary"
-            disabled={report.status !== "submitted" && report.status !== "reviewed"}
+            disabled={!canReject}
             onClick={() => void onAction("reject", reason)}
           >
             Reject

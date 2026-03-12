@@ -16,6 +16,11 @@ Preconstruction write actions require one of these project roles:
 
 Safety role has read access but cannot perform estimator write actions such as suggestion accept/reject.
 
+## Offline sync behavior
+
+- Report rejection now requires a non-empty reason.
+- During offline sync, non-retryable validation/client errors (for example `400`) are dropped so one invalid payload does not block the entire queue. Authentication/authorization failures remain queued for retry after re-authentication.
+
 ## Demo setup
 
 1. Seed demo data:

@@ -1,6 +1,8 @@
 import { addMutation, getMutations, removeMutation } from "./db";
-import { apiRequest } from "../services/api";
+import { ApiRequestError, apiRequest } from "../services/api";
 import type { OfflineMutation } from "../types/api";
+
+const NON_RETRYABLE_4XX = new Set([400, 404, 405, 409, 410, 411, 412, 413, 414, 415, 422]);
 
 export async function enqueueMutation(mutation: Omit<OfflineMutation, "id" | "createdAt">) {
   const queued: OfflineMutation = {
@@ -24,7 +26,13 @@ export async function flushMutationQueue(): Promise<number> {
       await removeMutation(mutation.id);
       flushed += 1;
       window.dispatchEvent(new CustomEvent("offline-queue-changed"));
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiRequestError && NON_RETRYABLE_4XX.has(error.status)) {
+        // Drop invalid client-side mutations so one bad payload doesn't block the queue forever.
+        await removeMutation(mutation.id);
+        window.dispatchEvent(new CustomEvent("offline-queue-changed"));
+        continue;
+      }
       // Stop processing to preserve ordering and retry later.
       break;
     }

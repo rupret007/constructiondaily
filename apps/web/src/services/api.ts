@@ -1,5 +1,17 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
+export class ApiRequestError extends Error {
+  status: number;
+  payload?: unknown;
+
+  constructor(message: string, status: number, payload?: unknown) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 function getCookie(name: string): string {
   const cookie = document.cookie.split("; ").find((item) => item.startsWith(`${name}=`));
   return cookie ? decodeURIComponent(cookie.split("=")[1]) : "";
@@ -60,10 +72,10 @@ export async function apiRequest<T>(endpoint: string, init: RequestInit = {}): P
     if (contentType.includes("application/json")) {
       const payload = (await response.json()) as unknown;
       const message = messageFromJson(payload);
-      throw new Error(message || `Request failed (${response.status}).`);
+      throw new ApiRequestError(message || `Request failed (${response.status}).`, response.status, payload);
     }
     const text = (await response.text()).trim();
-    throw new Error(text || `Request failed (${response.status}).`);
+    throw new ApiRequestError(text || `Request failed (${response.status}).`, response.status);
   }
 
   if (response.status === 204) {
