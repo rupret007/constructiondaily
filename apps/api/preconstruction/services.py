@@ -66,18 +66,19 @@ LABEL_TO_CATEGORY_UNIT: dict[str, tuple[str, str]] = {
 def _default_category_unit_for_suggestion(label: str | None, suggestion_type: str | None) -> tuple[str, str]:
     """Derive default category and unit from suggestion label/type. Uses exact label match and
     word-boundary matching to avoid over-match (e.g. 'room' in 'bathroom')."""
-    if not label:
-        return TakeoffItem.Category.CUSTOM, TakeoffItem.Unit.COUNT
-    label_lower = label.strip().lower()
-    if label_lower in LABEL_TO_CATEGORY_UNIT:
-        return LABEL_TO_CATEGORY_UNIT[label_lower]
-    # Word-boundary match: key must appear as a whole word in label (e.g. "door" in "door 1", not "doorway")
-    for key, (cat, unit) in LABEL_TO_CATEGORY_UNIT.items():
-        if re.search(r"\b" + re.escape(key) + r"\b", label_lower):
-            return cat, unit
+    if label:
+        label_lower = label.strip().lower()
+        if label_lower in LABEL_TO_CATEGORY_UNIT:
+            return LABEL_TO_CATEGORY_UNIT[label_lower]
+        # Word-boundary match: key must appear as a whole word in label (e.g. "door" in "door 1", not "doorway")
+        for key, (cat, unit) in LABEL_TO_CATEGORY_UNIT.items():
+            if re.search(r"\b" + re.escape(key) + r"\b", label_lower):
+                return cat, unit
     # Polygon/area -> square_feet; point -> count; rectangle -> count
     if suggestion_type == "polygon":
         return TakeoffItem.Category.CONCRETE_AREAS, TakeoffItem.Unit.SQUARE_FEET
+    if suggestion_type == "polyline":
+        return TakeoffItem.Category.LINEAR_MEASUREMENTS, TakeoffItem.Unit.LINEAR_FEET
     return TakeoffItem.Category.CUSTOM, TakeoffItem.Unit.COUNT
 
 

@@ -79,6 +79,8 @@ export type PlanSheet = {
   calibrated_unit: "feet" | "meters";
   parse_status: string;
   preview_image: string;
+  file_extension: string;
+  file_type: "pdf" | "dxf" | "unknown";
   created_by?: ApiUser;
   created_at: string;
   updated_at: string;

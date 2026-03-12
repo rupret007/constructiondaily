@@ -1,31 +1,54 @@
-"""Plan file (PDF) validation for uploads."""
+"""Plan file validation for uploads (PDF + DXF)."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 from django.conf import settings
 from rest_framework.exceptions import ValidationError
 
+from .filetypes import plan_file_extension_from_name
 
-PLAN_ALLOWED_EXTENSIONS = {"pdf"}
-PLAN_ALLOWED_MIME_TYPES = {"application/pdf"}
+PLAN_ALLOWED_EXTENSIONS = {"pdf", "dxf"}
+PLAN_ALLOWED_MIME_TYPES_BY_EXTENSION = {
+    "pdf": {"application/pdf"},
+    "dxf": {
+        "application/dxf",
+        "application/x-dxf",
+        "image/vnd.dxf",
+        "text/plain",
+        "application/octet-stream",
+    },
+}
 MAGIC_PDF = b"%PDF"
+DXF_SIGNATURE_TOKENS = ("SECTION", "ENTITIES", "EOF")
+
+
+def _looks_like_dxf(initial_bytes: bytes) -> bool:
+    try:
+        content = initial_bytes.decode("utf-8", errors="ignore").upper()
+    except Exception:
+        return False
+    if "DXF" in content and "SECTION" in content:
+        return True
+    # ASCII DXF is code/value pairs; these markers are expected near file start.
+    return all(token in content for token in DXF_SIGNATURE_TOKENS[:2])
 
 
 def validate_plan_upload(uploaded_file) -> tuple[str, str, int]:
     """
-    Validate uploaded plan file: PDF only, extension, MIME, size, magic bytes.
+    Validate uploaded plan file (PDF/DXF): extension, MIME, size, signature.
     Returns (extension, mime_type, size).
     """
     original_name = uploaded_file.name or ""
-    ext = Path(original_name).suffix.lower().lstrip(".")
+    ext = plan_file_extension_from_name(original_name)
     if ext not in PLAN_ALLOWED_EXTENSIONS:
-        raise ValidationError("Only PDF plan files are allowed.")
+        raise ValidationError("Only PDF or DXF plan files are allowed.")
 
-    mime_type = uploaded_file.content_type or ""
-    if mime_type not in PLAN_ALLOWED_MIME_TYPES:
-        raise ValidationError("File must be a PDF (application/pdf).")
+    mime_type = (uploaded_file.content_type or "").split(";")[0].strip().lower()
+    allowed_mimes = PLAN_ALLOWED_MIME_TYPES_BY_EXTENSION.get(ext, set())
+    if mime_type and mime_type not in allowed_mimes:
+        if ext == "pdf":
+            raise ValidationError("File must be a PDF (application/pdf).")
+        raise ValidationError("File must be a DXF (application/dxf or equivalent).")
 
     size = uploaded_file.size or 0
     if size <= 0:
@@ -36,9 +59,11 @@ def validate_plan_upload(uploaded_file) -> tuple[str, str, int]:
     if size > max_bytes:
         raise ValidationError("Plan file exceeds maximum size limit.")
 
-    initial_bytes = uploaded_file.read(16)
+    initial_bytes = uploaded_file.read(65536)
     uploaded_file.seek(0)
-    if not initial_bytes.startswith(MAGIC_PDF):
+    if ext == "pdf" and not initial_bytes.startswith(MAGIC_PDF):
         raise ValidationError("File signature does not match PDF.")
+    if ext == "dxf" and not _looks_like_dxf(initial_bytes):
+        raise ValidationError("File signature does not match DXF.")
 
     return ext, mime_type, size

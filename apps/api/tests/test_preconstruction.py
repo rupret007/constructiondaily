@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -33,6 +34,16 @@ from preconstruction.providers.registry import get_provider
 
 # Minimal valid PDF bytes (single page)
 MINIMAL_PDF = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\nxref\n0 4\ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n%%EOF"
+
+# Minimal ASCII DXF with line + block insert + closed polyline
+MINIMAL_DXF = (
+    b"0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
+    b"0\nLINE\n8\nA-DOOR\n10\n0.0\n20\n0.0\n11\n100.0\n21\n0.0\n"
+    b"0\nINSERT\n8\nA-DOOR-BLOCK\n2\nDOORKNOB\n10\n25.0\n20\n10.0\n"
+    b"0\nLWPOLYLINE\n8\nA-WALL\n70\n1\n"
+    b"10\n0.0\n20\n0.0\n10\n0.0\n20\n40.0\n10\n60.0\n20\n40.0\n10\n60.0\n20\n0.0\n"
+    b"0\nENDSEC\n0\nEOF\n"
+)
 
 
 class PreconstructionAPITests(TestCase):
@@ -104,6 +115,8 @@ class PreconstructionAPITests(TestCase):
             format="multipart",
         )
         self.assertEqual(create_resp.status_code, 201)
+        self.assertEqual(create_resp.json()["file_type"], "pdf")
+        self.assertEqual(create_resp.json()["file_extension"], "pdf")
         sheet_id = create_resp.json()["id"]
         self.assertTrue(PlanSheet.objects.filter(id=sheet_id).exists())
         sheet = PlanSheet.objects.get(id=sheet_id)
@@ -135,6 +148,33 @@ class PreconstructionAPITests(TestCase):
             format="multipart",
         )
         self.assertEqual(create_resp.status_code, 400)
+
+    def test_plan_sheet_upload_dxf_and_file_serve(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Sheets",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        dxf = BytesIO(MINIMAL_DXF)
+        dxf.name = "plan.dxf"
+        create_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "CAD-1", "file": dxf},
+            format="multipart",
+        )
+        self.assertEqual(create_resp.status_code, 201)
+        self.assertEqual(create_resp.json()["file_type"], "dxf")
+        self.assertEqual(create_resp.json()["file_extension"], "dxf")
+        sheet_id = create_resp.json()["id"]
+
+        file_resp = self.client.get(f"/api/preconstruction/sheets/{sheet_id}/file/")
+        self.assertEqual(file_resp.status_code, 200)
+        self.assertIn(
+            file_resp.get("Content-Type", ""),
+            ("application/dxf", "application/octet-stream", ""),
+        )
 
     def test_plan_sheet_update_and_delete_are_audited(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -172,6 +212,52 @@ class PreconstructionAPITests(TestCase):
             AuditEvent.objects.filter(event_type="delete_plan_sheet", object_id=str(sheet.id)).count(),
             1,
         )
+
+    def test_plan_sheet_calibration_requires_valid_pair(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Sheets",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="A-300",
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+
+        missing_height = self.client.patch(
+            f"/api/preconstruction/sheets/{sheet.id}/",
+            {"calibrated_width": "100"},
+            format="json",
+        )
+        self.assertEqual(missing_height.status_code, 400)
+
+        missing_width = self.client.patch(
+            f"/api/preconstruction/sheets/{sheet.id}/",
+            {"calibrated_height": "80"},
+            format="json",
+        )
+        self.assertEqual(missing_width.status_code, 400)
+
+        negative_width = self.client.patch(
+            f"/api/preconstruction/sheets/{sheet.id}/",
+            {"calibrated_width": "-1", "calibrated_height": "80"},
+            format="json",
+        )
+        self.assertEqual(negative_width.status_code, 400)
+
+        valid = self.client.patch(
+            f"/api/preconstruction/sheets/{sheet.id}/",
+            {"calibrated_width": "100", "calibrated_height": "80", "calibrated_unit": "feet"},
+            format="json",
+        )
+        self.assertEqual(valid.status_code, 200)
+        self.assertEqual(valid.json()["calibrated_width"], "100.0000")
+        self.assertEqual(valid.json()["calibrated_height"], "80.0000")
 
     def test_plan_sheet_update_and_delete_require_write_role(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -397,6 +483,99 @@ class PreconstructionAPITests(TestCase):
             1,
         )
 
+    def test_ai_analysis_runtime_failure_returns_400_and_records_failed_run(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        with patch(
+            "preconstruction.services.get_provider",
+            side_effect=RuntimeError("Provider initialization failed."),
+        ):
+            run_resp = self.client.post(
+                "/api/preconstruction/analysis/",
+                {"plan_sheet": str(plan_sheet.id), "user_prompt": "highlight all doors"},
+                format="json",
+            )
+        self.assertEqual(run_resp.status_code, 400)
+        self.assertEqual(run_resp.json()["status"], "failed")
+        self.assertIn("Provider initialization failed.", run_resp.json()["detail"])
+        run_id = run_resp.json()["run_id"]
+        run = AIAnalysisRun.objects.get(id=run_id)
+        self.assertEqual(run.status, AIAnalysisRun.Status.FAILED)
+
+    def test_ai_analysis_cad_dxf_provider_on_dxf_sheet(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        dxf = BytesIO(MINIMAL_DXF)
+        dxf.name = "doors.dxf"
+        upload_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "CAD Plan", "file": dxf},
+            format="multipart",
+        )
+        self.assertEqual(upload_resp.status_code, 201)
+        sheet_id = upload_resp.json()["id"]
+        run_resp = self.client.post(
+            "/api/preconstruction/analysis/",
+            {
+                "plan_sheet": sheet_id,
+                "provider_name": "cad_dxf",
+                "user_prompt": "doorknob and door",
+            },
+            format="json",
+        )
+        self.assertEqual(run_resp.status_code, 201)
+        self.assertEqual(run_resp.json()["status"], "completed")
+        run = AIAnalysisRun.objects.get(id=run_resp.json()["id"])
+        suggestions = list(AISuggestion.objects.filter(analysis_run=run))
+        self.assertGreater(len(suggestions), 0)
+        self.assertTrue(any("door" in s.label.lower() for s in suggestions))
+
+    def test_ai_analysis_openai_provider_rejects_dxf_sheet(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        dxf = BytesIO(MINIMAL_DXF)
+        dxf.name = "doors.dxf"
+        upload_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "CAD Plan", "file": dxf},
+            format="multipart",
+        )
+        self.assertEqual(upload_resp.status_code, 201)
+        sheet_id = upload_resp.json()["id"]
+        run_resp = self.client.post(
+            "/api/preconstruction/analysis/",
+            {
+                "plan_sheet": sheet_id,
+                "provider_name": "openai_vision",
+                "user_prompt": "find doors",
+            },
+            format="json",
+        )
+        self.assertEqual(run_resp.status_code, 400)
+        self.assertEqual(run_resp.json()["status"], "failed")
+        self.assertIn("PDF", run_resp.json()["detail"])
+
     def test_direct_suggestion_create_not_allowed(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(
@@ -466,6 +645,9 @@ class PreconstructionAPITests(TestCase):
         openai_provider = get_provider("openai_vision")
         self.assertIsNotNone(openai_provider)
         self.assertTrue(isinstance(openai_provider, BaseAnalysisProvider))
+        cad_provider = get_provider("cad_dxf")
+        self.assertIsNotNone(cad_provider)
+        self.assertTrue(isinstance(cad_provider, BaseAnalysisProvider))
         with self.assertRaises(ValueError):
             get_provider("nonexistent")
 
@@ -845,6 +1027,56 @@ class PreconstructionAPITests(TestCase):
         takeoff = accept_resp.json()["takeoff"]
         self.assertEqual(takeoff["unit"], "square_feet")
         self.assertEqual(takeoff["quantity"], "193.7504")
+
+    def test_accept_suggestion_polyline_defaults_linear_and_estimates_quantity(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            calibrated_width="100",
+            calibrated_height="80",
+            calibrated_unit=PlanSheet.CalibrationUnit.FEET,
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="measure lines",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="polyline",
+            geometry_json={
+                "type": "polyline",
+                "points": [{"x": 0.1, "y": 0.1}, {"x": 0.4, "y": 0.1}],
+            },
+            label="",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 200)
+        takeoff = accept_resp.json()["takeoff"]
+        self.assertEqual(takeoff["category"], "linear_measurements")
+        self.assertEqual(takeoff["unit"], "linear_feet")
+        self.assertEqual(takeoff["quantity"], "30.0000")
 
     def test_batch_accept_suggestions(self):
         """Batch accept accepts only pending suggestions with confidence >= min_confidence."""

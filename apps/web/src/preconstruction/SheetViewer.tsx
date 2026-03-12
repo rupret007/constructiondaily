@@ -1,5 +1,5 @@
 /**
- * PDF sheet viewer with zoom/pan and annotation overlay.
+ * Plan sheet viewer with zoom/pan and annotation overlay.
  *
  * Coordinate mapping: Annotation geometry is stored in normalized coordinates [0, 1]
  * (e.g. { type: "rectangle", x: 0.2, y: 0.2, width: 0.3, height: 0.15 }).
@@ -53,6 +53,8 @@ type Props = {
   onBack: () => void;
 };
 
+type AnalysisProvider = "mock" | "openai_vision" | "cad_dxf";
+
 function normToScreen(
   x: number,
   y: number,
@@ -95,6 +97,7 @@ function defaultCategoryUnitForSuggestion(
     if (pattern.test(labelLower)) return value;
   }
   if (suggestionType === "polygon") return { category: "concrete_areas", unit: "square_feet" };
+  if (suggestionType === "polyline") return { category: "linear_measurements", unit: "linear_feet" };
   return { category: "custom", unit: "count" };
 }
 
@@ -318,7 +321,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [editCategory, setEditCategory] = useState("doors");
   const [editUnit, setEditUnit] = useState("count");
   const [editQuantity, setEditQuantity] = useState("1");
-  const [analysisProvider, setAnalysisProvider] = useState<"mock" | "openai_vision">("mock");
+  const [analysisProvider, setAnalysisProvider] = useState<AnalysisProvider>("mock");
   const [calibrationWidth, setCalibrationWidth] = useState("");
   const [calibrationHeight, setCalibrationHeight] = useState("");
   const [calibrationUnit, setCalibrationUnit] = useState<"feet" | "meters">("feet");
@@ -333,6 +336,16 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         fetchAnnotationLayers(sheetId),
       ]);
       setSheet(sheetData);
+      setAnalysisProvider((prev) => {
+        if (sheetData.file_type === "dxf") {
+          if (prev === "openai_vision") return "cad_dxf";
+          return prev;
+        }
+        if (sheetData.file_type === "pdf" && prev === "cad_dxf") {
+          return "mock";
+        }
+        return prev;
+      });
       setCalibrationWidth(sheetData.calibrated_width != null ? String(sheetData.calibrated_width) : "");
       setCalibrationHeight(sheetData.calibrated_height != null ? String(sheetData.calibrated_height) : "");
       setCalibrationUnit(sheetData.calibrated_unit ?? "feet");
@@ -635,9 +648,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const handleCanvasMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (e.button !== 0) return;
     if (geometryEdit) {
-      const editToCommit = geometryEdit;
-      setGeometryEdit(null);
-      void commitGeometryEdit(editToCommit);
+      // Let the global mouseup listener commit and clear edit state once.
       return;
     }
     if (placementMode === "rectangle" && rectDragStart && rectDragCurrent) {
@@ -825,6 +836,14 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   };
 
   const handleRunAnalysis = async () => {
+    if (sheet?.file_type === "dxf" && analysisProvider === "openai_vision") {
+      setError("OpenAI vision analysis currently supports PDF plan sheets only.");
+      return;
+    }
+    if (sheet?.file_type === "pdf" && analysisProvider === "cad_dxf") {
+      setError("CAD DXF analysis requires a DXF plan sheet.");
+      return;
+    }
     setAiRunning(true);
     setError("");
     try {
@@ -938,6 +957,10 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
 
   useEffect(() => {
     if (!sheet) return;
+    if (sheet.file_type !== "pdf") {
+      setPdfDoc(null);
+      return;
+    }
     const url = planSheetFileUrl(sheetId);
     pdfjsLib.getDocument({ url, withCredentials: true }).promise.then((doc) => {
       setPdfDoc(doc);
@@ -1095,6 +1118,12 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         <button type="button" onClick={() => setScale((s) => Math.min(3, s + 0.2))}>+</button>
       </div>
       {error && <p className="error-text">{error}</p>}
+      {sheet?.file_type !== "pdf" && (
+        <p className="empty-hint">
+          DXF preview rendering is not available yet in the canvas. You can still run CAD analysis and process
+          takeoff/suggestions.
+        </p>
+      )}
       <div
         ref={containerRef}
         className="sheet-viewer-canvas-wrap"
@@ -1395,11 +1424,16 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       <div className="row">
         <select
           value={analysisProvider}
-          onChange={(e) => setAnalysisProvider(e.target.value as "mock" | "openai_vision")}
+          onChange={(e) => setAnalysisProvider(e.target.value as AnalysisProvider)}
           aria-label="Analysis provider"
         >
           <option value="mock">Mock provider</option>
-          <option value="openai_vision">OpenAI vision provider</option>
+          <option value="openai_vision" disabled={sheet?.file_type !== "pdf"}>
+            OpenAI vision provider (PDF)
+          </option>
+          <option value="cad_dxf" disabled={sheet?.file_type !== "dxf"}>
+            CAD DXF provider (DXF)
+          </option>
         </select>
         <input
           type="text"

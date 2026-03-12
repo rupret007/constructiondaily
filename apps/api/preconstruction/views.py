@@ -49,6 +49,7 @@ from .services import (
     run_plan_analysis,
 )
 from .providers.registry import get_provider
+from .filetypes import plan_content_type_for_extension, plan_file_extension_from_name
 from .storage import get_plan_file_path, store_plan_file
 from .validators import validate_plan_upload
 
@@ -203,12 +204,19 @@ class PlanSheetViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["get"], url_path="file")
     def file(self, request, pk=None):
-        """Serve the plan sheet PDF with permission check."""
+        """Serve the uploaded plan file with permission check."""
         sheet = self.get_object()
         path = get_plan_file_path(sheet.storage_key)
         if not path.exists():
             return Response({"detail": "File not found."}, status=status.HTTP_404_NOT_FOUND)
-        return FileResponse(path.open("rb"), as_attachment=False, filename=f"sheet-{sheet.id}.pdf")
+        ext = plan_file_extension_from_name(sheet.storage_key) or "bin"
+        filename = f"sheet-{sheet.id}.{ext}"
+        return FileResponse(
+            path.open("rb"),
+            as_attachment=False,
+            filename=filename,
+            content_type=plan_content_type_for_extension(ext),
+        )
 
 
 class AnnotationLayerViewSet(viewsets.ModelViewSet):
@@ -403,6 +411,16 @@ class AIAnalysisRunViewSet(viewsets.ModelViewSet):
         if not user_has_project_role(request.user, str(plan_sheet.project_id), PROJECT_WRITE_ROLES):
             raise PermissionDenied("Insufficient permissions.")
         run = run_plan_analysis(plan_sheet, user_prompt, request.user, provider_name=provider_name)
+        if run.status == AIAnalysisRun.Status.FAILED:
+            error_message = "Analysis failed."
+            if isinstance(run.response_payload_json, dict):
+                payload_error = run.response_payload_json.get("error")
+                if isinstance(payload_error, str) and payload_error.strip():
+                    error_message = payload_error
+            return Response(
+                {"detail": error_message, "run_id": str(run.id), "status": run.status},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = self.get_serializer(run)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 

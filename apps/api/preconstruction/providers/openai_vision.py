@@ -10,6 +10,7 @@ from urllib import error, request
 
 from django.conf import settings
 
+from preconstruction.filetypes import plan_file_type_from_storage_key
 from preconstruction.storage import get_plan_file_path
 
 from .base import BaseAnalysisProvider
@@ -51,6 +52,9 @@ class OpenAIVisionProvider(BaseAnalysisProvider):
     }
 
     def run_analysis(self, plan_sheet, user_prompt: str, **kwargs: Any) -> list[dict]:
+        if plan_file_type_from_storage_key(plan_sheet.storage_key) != "pdf":
+            raise RuntimeError("OpenAI vision provider currently supports PDF plan sheets only.")
+
         api_key = settings.PRECONSTRUCTION_OPENAI_API_KEY
         if not api_key:
             raise RuntimeError("PRECONSTRUCTION_OPENAI_API_KEY is not configured.")

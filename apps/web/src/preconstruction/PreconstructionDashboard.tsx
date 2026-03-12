@@ -109,7 +109,7 @@ export function PreconstructionDashboard({
     setUploading(true);
     onClearError();
     try {
-      await uploadPlanSheet(selectedPlanSetId, file, { title: title || file.name.replace(/\.pdf$/i, "") });
+      await uploadPlanSheet(selectedPlanSetId, file, { title: title || file.name.replace(/\.(pdf|dxf)$/i, "") });
       await loadSheets();
     } catch (e) {
       onError(e instanceof Error ? e.message : "Failed to upload sheet.");

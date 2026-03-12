@@ -48,7 +48,7 @@ class PlanSet(TimeStampedModel):
 
 
 class PlanSheet(TimeStampedModel):
-    """Uploaded drawing or plan page (e.g. one PDF file)."""
+    """Uploaded drawing file (PDF sheet or DXF CAD file)."""
 
     class ParseStatus(models.TextChoices):
         UPLOADED = "uploaded", "Uploaded"

@@ -193,7 +193,7 @@ export async function updateTakeoffItem(
 export async function triggerAnalysis(
   planSheetId: string,
   userPrompt: string,
-  providerName?: "mock" | "openai_vision"
+  providerName?: "mock" | "openai_vision" | "cad_dxf"
 ): Promise<AIAnalysisRun> {
   return apiRequest<AIAnalysisRun>(`${P}/analysis/`, {
     method: "POST",

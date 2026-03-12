@@ -52,16 +52,16 @@ export function PlanSheetList({
           className="min-w-[160px] flex-1"
         />
         <label className="flex min-h-11 min-w-[44px] cursor-pointer items-center justify-center rounded-md border border-input bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 has-[:disabled]:pointer-events-none has-[:disabled]:opacity-50">
-          <span className="sr-only">Upload PDF</span>
+          <span className="sr-only">Upload plan file</span>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,application/pdf"
+            accept=".pdf,.dxf,application/pdf,application/dxf,application/x-dxf"
             onChange={handleFileChange}
             className="hidden"
             disabled={uploading}
           />
-          {uploading ? "Uploading..." : "Upload PDF"}
+          {uploading ? "Uploading..." : "Upload Plan"}
         </label>
         <Button type="button" variant="outline" onClick={() => void onRefresh()} disabled={loading}>
           Refresh
@@ -74,7 +74,7 @@ export function PlanSheetList({
         <p className="text-sm text-muted-foreground">Loading sheets...</p>
       ) : sheets.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No sheets yet. Upload a PDF plan to get started.
+          No sheets yet. Upload a PDF or DXF plan to get started.
         </p>
       ) : (
         <div className="flex flex-col gap-2">
@@ -89,6 +89,7 @@ export function PlanSheetList({
                 {sheet.title || sheet.sheet_number || sheet.id.slice(0, 8)}
               </span>
               <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">{sheet.file_type.toUpperCase()}</span>
                 <span className="text-xs text-muted-foreground">{sheet.parse_status}</span>
                 <Button type="button" size="sm" onClick={() => onOpenSheet(sheet.id)}>
                   Open

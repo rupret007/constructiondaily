@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from django.contrib.auth.models import User
 from rest_framework import serializers
 
+from .filetypes import plan_file_extension_from_name, plan_file_type_from_storage_key
 from .models import (
     AIAnalysisRun,
     AISuggestion,
@@ -52,6 +55,8 @@ class PlanSetSerializer(serializers.ModelSerializer):
 
 class PlanSheetSerializer(serializers.ModelSerializer):
     created_by = PreconstructionUserSlimSerializer(read_only=True)
+    file_extension = serializers.SerializerMethodField()
+    file_type = serializers.SerializerMethodField()
 
     class Meta:
         model = PlanSheet
@@ -72,11 +77,42 @@ class PlanSheetSerializer(serializers.ModelSerializer):
             "calibrated_unit",
             "parse_status",
             "preview_image",
+            "file_extension",
+            "file_type",
             "created_by",
             "created_at",
             "updated_at",
         )
         read_only_fields = ("project", "plan_set", "storage_key", "parse_status", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        calibrated_width = attrs.get("calibrated_width")
+        calibrated_height = attrs.get("calibrated_height")
+
+        if self.instance:
+            if "project" in attrs and attrs["project"].id != self.instance.project_id:
+                raise serializers.ValidationError("Project cannot be changed after creation.")
+            if "plan_set" in attrs and attrs["plan_set"].id != self.instance.plan_set_id:
+                raise serializers.ValidationError("Plan set cannot be changed after creation.")
+
+        width = calibrated_width if "calibrated_width" in attrs else getattr(self.instance, "calibrated_width", None)
+        height = calibrated_height if "calibrated_height" in attrs else getattr(self.instance, "calibrated_height", None)
+
+        if (width is None) != (height is None):
+            raise serializers.ValidationError(
+                "calibrated_width and calibrated_height must both be set, or both be empty."
+            )
+        if width is not None and Decimal(str(width)) <= 0:
+            raise serializers.ValidationError("calibrated_width must be greater than zero.")
+        if height is not None and Decimal(str(height)) <= 0:
+            raise serializers.ValidationError("calibrated_height must be greater than zero.")
+        return attrs
+
+    def get_file_extension(self, obj) -> str:
+        return plan_file_extension_from_name(getattr(obj, "storage_key", ""))
+
+    def get_file_type(self, obj) -> str:
+        return plan_file_type_from_storage_key(getattr(obj, "storage_key", ""))
 
 
 class PlanSheetCreateSerializer(serializers.ModelSerializer):
