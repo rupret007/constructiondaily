@@ -16,6 +16,7 @@ from audit.services import record_audit_event
 from core.models import ProjectMembership
 from core.permissions import user_has_project_role
 
+from .cad import build_cad_preview
 from .models import (
     AIAnalysisRun,
     AISuggestion,
@@ -49,7 +50,11 @@ from .services import (
     run_plan_analysis,
 )
 from .providers.registry import get_provider
-from .filetypes import plan_content_type_for_extension, plan_file_extension_from_name
+from .filetypes import (
+    plan_content_type_for_extension,
+    plan_file_extension_from_name,
+    plan_file_type_from_storage_key,
+)
 from .storage import get_plan_file_path, store_plan_file
 from .validators import validate_plan_upload
 
@@ -217,6 +222,22 @@ class PlanSheetViewSet(viewsets.ModelViewSet):
             filename=filename,
             content_type=plan_content_type_for_extension(ext),
         )
+
+    @action(detail=True, methods=["get"], url_path="cad_preview")
+    def cad_preview(self, request, pk=None):
+        """Return normalized CAD geometry for in-app canvas preview."""
+        sheet = self.get_object()
+        file_type = plan_file_type_from_storage_key(sheet.storage_key)
+        if file_type not in {"dxf", "dwg"}:
+            return Response(
+                {"detail": "CAD preview is available for DXF/DWG sheets only."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            preview = build_cad_preview(sheet)
+        except RuntimeError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(preview, status=status.HTTP_200_OK)
 
 
 class AnnotationLayerViewSet(viewsets.ModelViewSet):

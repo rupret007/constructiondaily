@@ -6,6 +6,7 @@ import type {
   AnnotationLayer,
   ExportRecord,
   PlanSet,
+  PlanSheetCadPreview,
   PlanSheet,
   RevisionSnapshot,
   TakeoffItem,
@@ -88,6 +89,10 @@ export async function updatePlanSheet(
 export function planSheetFileUrl(sheetId: string): string {
   const base = import.meta.env.VITE_API_BASE ?? "/api";
   return `${base}${P}/sheets/${sheetId}/file/`;
+}
+
+export async function fetchPlanSheetCadPreview(sheetId: string): Promise<PlanSheetCadPreview> {
+  return apiRequest<PlanSheetCadPreview>(`${P}/sheets/${sheetId}/cad_preview/`);
 }
 
 export async function fetchAnnotationLayers(planSheetId: string): Promise<AnnotationLayer[]> {

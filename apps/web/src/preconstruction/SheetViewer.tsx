@@ -20,6 +20,7 @@ import {
   fetchAnnotationLayers,
   fetchAnnotations,
   fetchExportRecords,
+  fetchPlanSheetCadPreview,
   fetchPlanSheet,
   fetchSnapshots,
   fetchSuggestions,
@@ -37,6 +38,7 @@ import type {
   AnnotationItem,
   AnnotationLayer as LayerType,
   ExportRecord,
+  PlanSheetCadPreviewItem,
   PlanSheet,
   RevisionSnapshot,
   TakeoffItem,
@@ -54,6 +56,8 @@ type Props = {
 };
 
 type AnalysisProvider = "mock" | "openai_vision" | "cad_dxf";
+const CAD_CANVAS_BASE_WIDTH = 1400;
+const CAD_CANVAS_BASE_HEIGHT = 900;
 
 function normToScreen(
   x: number,
@@ -296,6 +300,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0 });
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+  const [cadPreviewItems, setCadPreviewItems] = useState<PlanSheetCadPreviewItem[]>([]);
   const [, setPageWidth] = useState(612);
   const [, setPageHeight] = useState(792);
   const [addTakeoffCategory, setAddTakeoffCategory] = useState("doors");
@@ -337,7 +342,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       ]);
       setSheet(sheetData);
       setAnalysisProvider((prev) => {
-        if (sheetData.file_type === "dxf") {
+        if (sheetData.file_type === "dxf" || sheetData.file_type === "dwg") {
           if (prev === "openai_vision") return "cad_dxf";
           return prev;
         }
@@ -350,10 +355,25 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       setCalibrationHeight(sheetData.calibrated_height != null ? String(sheetData.calibrated_height) : "");
       setCalibrationUnit(sheetData.calibrated_unit ?? "feet");
       setLayers(layersData);
-      const width = sheetData.width != null ? Number(sheetData.width) : 612;
-      const height = sheetData.height != null ? Number(sheetData.height) : 792;
+      const width = sheetData.file_type === "pdf"
+        ? (sheetData.width != null ? Number(sheetData.width) : 612)
+        : CAD_CANVAS_BASE_WIDTH;
+      const height = sheetData.file_type === "pdf"
+        ? (sheetData.height != null ? Number(sheetData.height) : 792)
+        : CAD_CANVAS_BASE_HEIGHT;
       setPageWidth(width);
       setPageHeight(height);
+      if (sheetData.file_type === "dxf" || sheetData.file_type === "dwg") {
+        try {
+          const preview = await fetchPlanSheetCadPreview(sheetId);
+          setCadPreviewItems(preview.items ?? []);
+        } catch (previewError) {
+          setCadPreviewItems([]);
+          setError(previewError instanceof Error ? previewError.message : "Failed to load CAD preview.");
+        }
+      } else {
+        setCadPreviewItems([]);
+      }
       const annList = await fetchAnnotations(sheetId);
       setAnnotations(annList);
       const takeoffList = await fetchTakeoffItems(planSetId, sheetId);
@@ -836,12 +856,12 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   };
 
   const handleRunAnalysis = async () => {
-    if (sheet?.file_type === "dxf" && analysisProvider === "openai_vision") {
+    if ((sheet?.file_type === "dxf" || sheet?.file_type === "dwg") && analysisProvider === "openai_vision") {
       setError("OpenAI vision analysis currently supports PDF plan sheets only.");
       return;
     }
     if (sheet?.file_type === "pdf" && analysisProvider === "cad_dxf") {
-      setError("CAD DXF analysis requires a DXF plan sheet.");
+      setError("CAD analysis requires a DXF or DWG plan sheet.");
       return;
     }
     setAiRunning(true);
@@ -955,6 +975,117 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     }
   };
 
+  const drawCadReference = useCallback((ctx: CanvasRenderingContext2D, pw: number, ph: number) => {
+    cadPreviewItems.forEach((item) => {
+      drawAnnotation(
+        ctx,
+        { geometry_json: item.geometry_json, label: item.label },
+        pw,
+        ph,
+        "rgba(15, 23, 42, 0.18)"
+      );
+    });
+  }, [cadPreviewItems]);
+
+  const drawInteractiveOverlays = useCallback((ctx: CanvasRenderingContext2D, pw: number, ph: number) => {
+    const visibleLayers = layers.filter((l) => l.is_visible);
+    const layerIds = new Set(visibleLayers.map((l) => l.id));
+    const toDraw = annotations.filter((a) => layerIds.has(a.layer));
+    toDraw.forEach((item) => {
+      if (geometryEdit && item.id === geometryEdit.annotationId) {
+        drawAnnotation(
+          ctx,
+          { geometry_json: geometryEdit.geometry, label: item.label },
+          pw,
+          ph,
+          "rgba(16, 185, 129, 0.35)"
+        );
+        return;
+      }
+      drawAnnotation(ctx, item, pw, ph);
+    });
+
+    if (rectDragStart && rectDragCurrent) {
+      const x = Math.min(rectDragStart.x, rectDragCurrent.x);
+      const y = Math.min(rectDragStart.y, rectDragCurrent.y);
+      const width = Math.abs(rectDragCurrent.x - rectDragStart.x);
+      const height = Math.abs(rectDragCurrent.y - rectDragStart.y);
+      drawAnnotation(
+        ctx,
+        { geometry_json: { type: "rectangle", x, y, width, height }, label: "" },
+        pw,
+        ph,
+        "rgba(59, 130, 246, 0.3)"
+      );
+    }
+
+    if ((placementMode === "polygon" || placementMode === "polyline") && draftPathPoints.length > 0) {
+      drawAnnotation(
+        ctx,
+        { geometry_json: { type: placementMode, points: draftPathPoints }, label: "" },
+        pw,
+        ph,
+        "rgba(59, 130, 246, 0.3)"
+      );
+      ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+      draftPathPoints.forEach((point) => {
+        const p = normToScreen(point.x, point.y, pw, ph);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    const selected = toDraw.find((a) => a.id === selectedAnnotationId);
+    if (selected) {
+      const selectedGeometry =
+        geometryEdit && geometryEdit.annotationId === selected.id
+          ? geometryEdit.geometry
+          : (selected.geometry_json as Record<string, unknown>);
+      const drawHandle = (xNorm: number, yNorm: number) => {
+        const p = normToScreen(xNorm, yNorm, pw, ph);
+        const size = 8;
+        ctx.fillStyle = "#f8fafc";
+        ctx.strokeStyle = "#0f172a";
+        ctx.lineWidth = 1;
+        ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+        ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
+      };
+      if (selectedGeometry.type === "point") {
+        const x = asNumber(selectedGeometry.x);
+        const y = asNumber(selectedGeometry.y);
+        if (x != null && y != null) drawHandle(x, y);
+      } else if (selectedGeometry.type === "rectangle") {
+        const x = asNumber(selectedGeometry.x);
+        const y = asNumber(selectedGeometry.y);
+        const width = asNumber(selectedGeometry.width);
+        const height = asNumber(selectedGeometry.height);
+        if (x != null && y != null && width != null && height != null) {
+          drawHandle(x, y);
+          drawHandle(x + width, y);
+          drawHandle(x, y + height);
+          drawHandle(x + width, y + height);
+        }
+      } else if ((selectedGeometry.type === "polygon" || selectedGeometry.type === "polyline") && Array.isArray(selectedGeometry.points)) {
+        const points = selectedGeometry.points as Array<{ x: unknown; y: unknown }>;
+        points.forEach((point) => {
+          const x = asNumber(point.x);
+          const y = asNumber(point.y);
+          if (x != null && y != null) drawHandle(x, y);
+        });
+      }
+    }
+  }, [
+    layers,
+    annotations,
+    geometryEdit,
+    rectDragStart,
+    rectDragCurrent,
+    placementMode,
+    draftPathPoints,
+    selectedAnnotationId,
+  ]);
+
   useEffect(() => {
     if (!sheet) return;
     if (sheet.file_type !== "pdf") {
@@ -981,95 +1112,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       const renderContext = { canvasContext: ctx, viewport };
       const pw = viewport.width;
       const ph = viewport.height;
-      const drawOverlays = () => {
-        const visibleLayers = layers.filter((l) => l.is_visible);
-        const layerIds = new Set(visibleLayers.map((l) => l.id));
-        const toDraw = annotations.filter((a) => layerIds.has(a.layer));
-        toDraw.forEach((item) => {
-          if (geometryEdit && item.id === geometryEdit.annotationId) {
-            drawAnnotation(
-              ctx,
-              { geometry_json: geometryEdit.geometry, label: item.label },
-              pw,
-              ph,
-              "rgba(16, 185, 129, 0.35)"
-            );
-            return;
-          }
-          drawAnnotation(ctx, item, pw, ph);
-        });
-
-        if (rectDragStart && rectDragCurrent) {
-          const x = Math.min(rectDragStart.x, rectDragCurrent.x);
-          const y = Math.min(rectDragStart.y, rectDragCurrent.y);
-          const width = Math.abs(rectDragCurrent.x - rectDragStart.x);
-          const height = Math.abs(rectDragCurrent.y - rectDragStart.y);
-          drawAnnotation(
-            ctx,
-            { geometry_json: { type: "rectangle", x, y, width, height }, label: "" },
-            pw,
-            ph,
-            "rgba(59, 130, 246, 0.3)"
-          );
-        }
-
-        if ((placementMode === "polygon" || placementMode === "polyline") && draftPathPoints.length > 0) {
-          drawAnnotation(
-            ctx,
-            { geometry_json: { type: placementMode, points: draftPathPoints }, label: "" },
-            pw,
-            ph,
-            "rgba(59, 130, 246, 0.3)"
-          );
-          ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
-          draftPathPoints.forEach((point) => {
-            const p = normToScreen(point.x, point.y, pw, ph);
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-            ctx.fill();
-          });
-        }
-
-        const selected = toDraw.find((a) => a.id === selectedAnnotationId);
-        if (selected) {
-          const selectedGeometry =
-            geometryEdit && geometryEdit.annotationId === selected.id
-              ? geometryEdit.geometry
-              : (selected.geometry_json as Record<string, unknown>);
-          const drawHandle = (xNorm: number, yNorm: number) => {
-            const p = normToScreen(xNorm, yNorm, pw, ph);
-            const size = 8;
-            ctx.fillStyle = "#f8fafc";
-            ctx.strokeStyle = "#0f172a";
-            ctx.lineWidth = 1;
-            ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
-            ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
-          };
-          if (selectedGeometry.type === "point") {
-            const x = asNumber(selectedGeometry.x);
-            const y = asNumber(selectedGeometry.y);
-            if (x != null && y != null) drawHandle(x, y);
-          } else if (selectedGeometry.type === "rectangle") {
-            const x = asNumber(selectedGeometry.x);
-            const y = asNumber(selectedGeometry.y);
-            const width = asNumber(selectedGeometry.width);
-            const height = asNumber(selectedGeometry.height);
-            if (x != null && y != null && width != null && height != null) {
-              drawHandle(x, y);
-              drawHandle(x + width, y);
-              drawHandle(x, y + height);
-              drawHandle(x + width, y + height);
-            }
-          } else if ((selectedGeometry.type === "polygon" || selectedGeometry.type === "polyline") && Array.isArray(selectedGeometry.points)) {
-            const points = selectedGeometry.points as Array<{ x: unknown; y: unknown }>;
-            points.forEach((point) => {
-              const x = asNumber(point.x);
-              const y = asNumber(point.y);
-              if (x != null && y != null) drawHandle(x, y);
-            });
-          }
-        }
-      };
+      const drawOverlays = () => drawInteractiveOverlays(ctx, pw, ph);
       const task = page.render(renderContext);
       if (task.promise) {
         task.promise.then(drawOverlays);
@@ -1080,15 +1123,43 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   }, [
     pdfDoc,
     scale,
-    layers,
-    annotations,
-    rectDragStart,
-    rectDragCurrent,
-    placementMode,
-    draftPathPoints,
-    selectedAnnotationId,
-    geometryEdit,
+    drawInteractiveOverlays,
   ]);
+
+  useEffect(() => {
+    if (!sheet || sheet.file_type === "pdf" || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const width = Math.max(700, Math.round(CAD_CANVAS_BASE_WIDTH * scale));
+    const height = Math.max(450, Math.round(CAD_CANVAS_BASE_HEIGHT * scale));
+    canvas.width = width;
+    canvas.height = height;
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+
+    // Lightweight construction-grid background for CAD canvas readability.
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.18)";
+    ctx.lineWidth = 1;
+    const gridStep = Math.max(30, Math.round(60 * scale));
+    for (let x = 0; x <= width; x += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= height; y += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
+
+    drawCadReference(ctx, width, height);
+    drawInteractiveOverlays(ctx, width, height);
+  }, [sheet, scale, drawCadReference, drawInteractiveOverlays]);
 
   if (loading && !sheet) {
     return (
@@ -1120,8 +1191,8 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       {error && <p className="error-text">{error}</p>}
       {sheet?.file_type !== "pdf" && (
         <p className="empty-hint">
-          DXF preview rendering is not available yet in the canvas. You can still run CAD analysis and process
-          takeoff/suggestions.
+          CAD preview mode is active. Entity geometry is rendered from parsed DXF data (DWG requires configured
+          converter on the backend).
         </p>
       )}
       <div
@@ -1431,8 +1502,8 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           <option value="openai_vision" disabled={sheet?.file_type !== "pdf"}>
             OpenAI vision provider (PDF)
           </option>
-          <option value="cad_dxf" disabled={sheet?.file_type !== "dxf"}>
-            CAD DXF provider (DXF)
+          <option value="cad_dxf" disabled={sheet?.file_type !== "dxf" && sheet?.file_type !== "dwg"}>
+            CAD provider (DXF/DWG)
           </option>
         </select>
         <input

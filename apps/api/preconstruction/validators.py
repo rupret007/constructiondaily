@@ -7,7 +7,7 @@ from rest_framework.exceptions import ValidationError
 
 from .filetypes import plan_file_extension_from_name
 
-PLAN_ALLOWED_EXTENSIONS = {"pdf", "dxf"}
+PLAN_ALLOWED_EXTENSIONS = {"pdf", "dxf", "dwg"}
 PLAN_ALLOWED_MIME_TYPES_BY_EXTENSION = {
     "pdf": {"application/pdf"},
     "dxf": {
@@ -17,9 +17,16 @@ PLAN_ALLOWED_MIME_TYPES_BY_EXTENSION = {
         "text/plain",
         "application/octet-stream",
     },
+    "dwg": {
+        "application/acad",
+        "application/x-acad",
+        "image/vnd.dwg",
+        "application/octet-stream",
+    },
 }
 MAGIC_PDF = b"%PDF"
 DXF_SIGNATURE_TOKENS = ("SECTION", "ENTITIES", "EOF")
+DWG_MAGIC_PREFIX = b"AC10"
 
 
 def _looks_like_dxf(initial_bytes: bytes) -> bool:
@@ -41,14 +48,16 @@ def validate_plan_upload(uploaded_file) -> tuple[str, str, int]:
     original_name = uploaded_file.name or ""
     ext = plan_file_extension_from_name(original_name)
     if ext not in PLAN_ALLOWED_EXTENSIONS:
-        raise ValidationError("Only PDF or DXF plan files are allowed.")
+        raise ValidationError("Only PDF, DXF, or DWG plan files are allowed.")
 
     mime_type = (uploaded_file.content_type or "").split(";")[0].strip().lower()
     allowed_mimes = PLAN_ALLOWED_MIME_TYPES_BY_EXTENSION.get(ext, set())
     if mime_type and mime_type not in allowed_mimes:
         if ext == "pdf":
             raise ValidationError("File must be a PDF (application/pdf).")
-        raise ValidationError("File must be a DXF (application/dxf or equivalent).")
+        if ext == "dxf":
+            raise ValidationError("File must be a DXF (application/dxf or equivalent).")
+        raise ValidationError("File must be a DWG (application/acad or equivalent).")
 
     size = uploaded_file.size or 0
     if size <= 0:
@@ -65,5 +74,7 @@ def validate_plan_upload(uploaded_file) -> tuple[str, str, int]:
         raise ValidationError("File signature does not match PDF.")
     if ext == "dxf" and not _looks_like_dxf(initial_bytes):
         raise ValidationError("File signature does not match DXF.")
+    if ext == "dwg" and not initial_bytes.startswith(DWG_MAGIC_PREFIX):
+        raise ValidationError("File signature does not match DWG.")
 
     return ext, mime_type, size

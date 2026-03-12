@@ -56,7 +56,7 @@ export function PlanSheetList({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.dxf,application/pdf,application/dxf,application/x-dxf"
+            accept=".pdf,.dxf,.dwg,application/pdf,application/dxf,application/x-dxf,application/acad,image/vnd.dwg"
             onChange={handleFileChange}
             className="hidden"
             disabled={uploading}
@@ -74,7 +74,7 @@ export function PlanSheetList({
         <p className="text-sm text-muted-foreground">Loading sheets...</p>
       ) : sheets.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No sheets yet. Upload a PDF or DXF plan to get started.
+          No sheets yet. Upload a PDF, DXF, or DWG plan to get started.
         </p>
       ) : (
         <div className="flex flex-col gap-2">

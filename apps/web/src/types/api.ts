@@ -80,10 +80,31 @@ export type PlanSheet = {
   parse_status: string;
   preview_image: string;
   file_extension: string;
-  file_type: "pdf" | "dxf" | "unknown";
+  file_type: "pdf" | "dxf" | "dwg" | "unknown";
   created_by?: ApiUser;
   created_at: string;
   updated_at: string;
+};
+
+export type PlanSheetCadPreviewItem = {
+  id: number;
+  entity_type: string;
+  layer: string;
+  label: string;
+  confidence: number;
+  geometry_json: GeometryJson;
+};
+
+export type PlanSheetCadPreview = {
+  source_type: "dxf" | "dwg";
+  item_count: number;
+  bounds: {
+    min_x: number;
+    min_y: number;
+    max_x: number;
+    max_y: number;
+  } | null;
+  items: PlanSheetCadPreviewItem[];
 };
 
 export type AnnotationLayer = {

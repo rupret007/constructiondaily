@@ -45,6 +45,9 @@ MINIMAL_DXF = (
     b"0\nENDSEC\n0\nEOF\n"
 )
 
+# Minimal DWG-like header bytes for upload/signature validation.
+MINIMAL_DWG = b"AC1027\x00\x01MockDWGContent"
+
 
 class PreconstructionAPITests(TestCase):
     def setUp(self):
@@ -175,6 +178,81 @@ class PreconstructionAPITests(TestCase):
             file_resp.get("Content-Type", ""),
             ("application/dxf", "application/octet-stream", ""),
         )
+
+    def test_plan_sheet_upload_dwg_and_file_serve(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Sheets",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        dwg = BytesIO(MINIMAL_DWG)
+        dwg.name = "plan.dwg"
+        create_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "DWG-1", "file": dwg},
+            format="multipart",
+        )
+        self.assertEqual(create_resp.status_code, 201)
+        self.assertEqual(create_resp.json()["file_type"], "dwg")
+        self.assertEqual(create_resp.json()["file_extension"], "dwg")
+        sheet_id = create_resp.json()["id"]
+
+        file_resp = self.client.get(f"/api/preconstruction/sheets/{sheet_id}/file/")
+        self.assertEqual(file_resp.status_code, 200)
+        self.assertIn(
+            file_resp.get("Content-Type", ""),
+            ("application/acad", "application/octet-stream", ""),
+        )
+
+    def test_plan_sheet_cad_preview_returns_items_for_dxf(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Sheets",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        dxf = BytesIO(MINIMAL_DXF)
+        dxf.name = "preview.dxf"
+        create_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "CAD-Preview", "file": dxf},
+            format="multipart",
+        )
+        self.assertEqual(create_resp.status_code, 201)
+        sheet_id = create_resp.json()["id"]
+
+        preview_resp = self.client.get(f"/api/preconstruction/sheets/{sheet_id}/cad_preview/")
+        self.assertEqual(preview_resp.status_code, 200)
+        payload = preview_resp.json()
+        self.assertEqual(payload["source_type"], "dxf")
+        self.assertGreater(payload["item_count"], 0)
+        self.assertGreaterEqual(len(payload["items"]), 1)
+        self.assertIn("geometry_json", payload["items"][0])
+
+    def test_plan_sheet_cad_preview_rejects_pdf(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Sheets",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        pdf = BytesIO(MINIMAL_PDF)
+        pdf.name = "plan.pdf"
+        create_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "A-101", "file": pdf},
+            format="multipart",
+        )
+        self.assertEqual(create_resp.status_code, 201)
+        sheet_id = create_resp.json()["id"]
+
+        preview_resp = self.client.get(f"/api/preconstruction/sheets/{sheet_id}/cad_preview/")
+        self.assertEqual(preview_resp.status_code, 400)
+        self.assertIn("DXF/DWG", preview_resp.json()["detail"])
 
     def test_plan_sheet_update_and_delete_are_audited(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -575,6 +653,61 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(run_resp.status_code, 400)
         self.assertEqual(run_resp.json()["status"], "failed")
         self.assertIn("PDF", run_resp.json()["detail"])
+
+    def test_ai_analysis_cad_dxf_provider_on_dwg_requires_converter(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        dwg = BytesIO(MINIMAL_DWG)
+        dwg.name = "plan.dwg"
+        upload_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "DWG Plan", "file": dwg},
+            format="multipart",
+        )
+        self.assertEqual(upload_resp.status_code, 201)
+        sheet_id = upload_resp.json()["id"]
+        with patch("preconstruction.cad.settings.PRECONSTRUCTION_DWG_CONVERTER_COMMAND", ""):
+            run_resp = self.client.post(
+                "/api/preconstruction/analysis/",
+                {
+                    "plan_sheet": sheet_id,
+                    "provider_name": "cad_dxf",
+                    "user_prompt": "find doors",
+                },
+                format="json",
+            )
+        self.assertEqual(run_resp.status_code, 400)
+        self.assertEqual(run_resp.json()["status"], "failed")
+        self.assertIn("DWG conversion", run_resp.json()["detail"])
+
+    def test_plan_sheet_cad_preview_for_dwg_uses_converter(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        dwg = BytesIO(MINIMAL_DWG)
+        dwg.name = "converted.dwg"
+        upload_resp = self.client.post(
+            "/api/preconstruction/sheets/",
+            {"plan_set": str(plan_set.id), "title": "DWG Plan", "file": dwg},
+            format="multipart",
+        )
+        self.assertEqual(upload_resp.status_code, 201)
+        sheet_id = upload_resp.json()["id"]
+        with patch("preconstruction.cad._convert_dwg_to_dxf_text", return_value=MINIMAL_DXF.decode("utf-8")):
+            preview_resp = self.client.get(f"/api/preconstruction/sheets/{sheet_id}/cad_preview/")
+        self.assertEqual(preview_resp.status_code, 200)
+        payload = preview_resp.json()
+        self.assertEqual(payload["source_type"], "dwg")
+        self.assertGreater(payload["item_count"], 0)
 
     def test_direct_suggestion_create_not_allowed(self):
         self.client.login(username="estimator1", password="test-pass")
