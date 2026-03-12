@@ -7,7 +7,7 @@ import io
 import json
 import math
 import re
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from typing import Any
 
 from django.conf import settings
@@ -61,6 +61,28 @@ LABEL_TO_CATEGORY_UNIT: dict[str, tuple[str, str]] = {
     "rooms": (TakeoffItem.Category.ROOMS, TakeoffItem.Unit.COUNT),
     "linear measurement": (TakeoffItem.Category.LINEAR_MEASUREMENTS, TakeoffItem.Unit.LINEAR_FEET),
 }
+
+ASSEMBLY_PROFILE_AUTO = "auto"
+ASSEMBLY_PROFILE_NONE = "none"
+ASSEMBLY_PROFILE_DOOR_SET = "door_set"
+ASSEMBLY_PROFILE_WINDOW_SET = "window_set"
+ASSEMBLY_PROFILE_FIXTURE_SET = "fixture_set"
+SUPPORTED_ASSEMBLY_PROFILES = {
+    ASSEMBLY_PROFILE_AUTO,
+    ASSEMBLY_PROFILE_NONE,
+    ASSEMBLY_PROFILE_DOOR_SET,
+    ASSEMBLY_PROFILE_WINDOW_SET,
+    ASSEMBLY_PROFILE_FIXTURE_SET,
+}
+
+
+def _normalize_assembly_profile(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Invalid assembly_profile.")
+    normalized = value.strip().lower()
+    if normalized not in SUPPORTED_ASSEMBLY_PROFILES:
+        raise ValueError("Invalid assembly_profile.")
+    return normalized
 
 
 def _default_category_unit_for_suggestion(label: str | None, suggestion_type: str | None) -> tuple[str, str]:
@@ -220,6 +242,108 @@ def _estimate_quantity_from_geometry(
     return Decimal("1")
 
 
+def _round_up_to_step(quantity: Decimal, step: Decimal) -> Decimal:
+    if step <= 0:
+        return quantity
+    return (quantity / step).to_integral_value(rounding=ROUND_CEILING) * step
+
+
+def _decimal_setting(setting_name: str, default: str) -> Decimal:
+    raw = getattr(settings, setting_name, default)
+    try:
+        parsed = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal(default)
+    if not parsed.is_finite():
+        return Decimal(default)
+    return parsed
+
+
+def _normalize_estimator_quantity(quantity: Decimal, unit: str) -> Decimal:
+    if not quantity.is_finite():
+        raise ValueError("Quantity must be a finite number.")
+    if quantity < 0:
+        raise ValueError("Quantity must be non-negative.")
+
+    linear_waste = _decimal_setting("PRECONSTRUCTION_LINEAR_WASTE_FACTOR", "0")
+    area_waste = _decimal_setting("PRECONSTRUCTION_AREA_WASTE_FACTOR", "0")
+    linear_step = _decimal_setting("PRECONSTRUCTION_LINEAR_ROUND_STEP_FEET", "0.0001")
+    area_step = _decimal_setting("PRECONSTRUCTION_AREA_ROUND_STEP_SQFT", "0.0001")
+    cubic_step = _decimal_setting("PRECONSTRUCTION_CUBIC_ROUND_STEP_CY", "0.0001")
+
+    if unit in {TakeoffItem.Unit.COUNT, TakeoffItem.Unit.EACH}:
+        if quantity == 0:
+            return Decimal("0")
+        return quantity.to_integral_value(rounding=ROUND_CEILING)
+
+    if unit == TakeoffItem.Unit.LINEAR_FEET:
+        adjusted = quantity * (Decimal("1") + max(Decimal("0"), linear_waste))
+        return _round_up_to_step(adjusted, linear_step)
+
+    if unit == TakeoffItem.Unit.SQUARE_FEET:
+        adjusted = quantity * (Decimal("1") + max(Decimal("0"), area_waste))
+        return _round_up_to_step(adjusted, area_step)
+
+    if unit == TakeoffItem.Unit.CUBIC_YARDS:
+        return _round_up_to_step(quantity, cubic_step)
+
+    return quantity
+
+
+def _detect_assembly_profile(category: str, label: str | None) -> str | None:
+    label_lower = (label or "").strip().lower()
+    if category == TakeoffItem.Category.DOORS or re.search(r"\bdoor(s)?\b", label_lower):
+        return ASSEMBLY_PROFILE_DOOR_SET
+    if category == TakeoffItem.Category.WINDOWS or re.search(r"\bwindow(s)?\b", label_lower):
+        return ASSEMBLY_PROFILE_WINDOW_SET
+    if category == TakeoffItem.Category.PLUMBING_FIXTURES or re.search(
+        r"\b(toilet|lavatory|sink|fixture)\b",
+        label_lower,
+    ):
+        return ASSEMBLY_PROFILE_FIXTURE_SET
+    return None
+
+
+def _expand_takeoff_components(
+    *,
+    category: str,
+    unit: str,
+    quantity: Decimal,
+    label: str | None,
+    assembly_profile: str,
+) -> tuple[list[dict[str, Any]], str]:
+    profile = _normalize_assembly_profile(assembly_profile)
+    if profile == ASSEMBLY_PROFILE_AUTO:
+        profile = _detect_assembly_profile(category, label) or ASSEMBLY_PROFILE_NONE
+
+    components = [
+        {
+            "category": category,
+            "unit": unit,
+            "quantity": _normalize_estimator_quantity(quantity, unit),
+            "notes_suffix": "Primary quantity",
+        }
+    ]
+
+    if profile == ASSEMBLY_PROFILE_DOOR_SET:
+        components.append(
+            {
+                "category": TakeoffItem.Category.DOOR_HARDWARE,
+                "unit": TakeoffItem.Unit.EACH,
+                "quantity": _normalize_estimator_quantity(quantity, TakeoffItem.Unit.EACH),
+                "notes_suffix": "Door hardware set (auto assembly)",
+            }
+        )
+    elif profile == ASSEMBLY_PROFILE_WINDOW_SET:
+        # Window assemblies are represented by the primary line item only in v1.
+        pass
+    elif profile == ASSEMBLY_PROFILE_FIXTURE_SET:
+        # Fixture assemblies are represented by the primary line item only in v1.
+        pass
+
+    return components, profile
+
+
 # ----- Suggestion accept / reject -----
 # Learning signals (traceable feedback for future calibration; no active self-training):
 # AISuggestion.decision_state, decided_by, decided_at, accepted_annotation; AnnotationItem
@@ -324,21 +448,42 @@ def accept_suggestion(
                 qty = Decimal(str(qty))
             except (InvalidOperation, TypeError, ValueError):
                 raise ValueError("Invalid quantity.")
-        if qty < 0:
-            raise ValueError("Quantity must be non-negative.")
+        if not isinstance(qty, Decimal):
+            qty = Decimal(str(qty))
 
-        takeoff = TakeoffItem.objects.create(
-            project_id=plan_sheet.project_id,
-            plan_set=plan_set,
-            plan_sheet=plan_sheet,
+        assembly_profile = ASSEMBLY_PROFILE_NONE if overrides_provided else ASSEMBLY_PROFILE_AUTO
+        components, resolved_profile = _expand_takeoff_components(
             category=category or TakeoffItem.Category.CUSTOM,
             unit=unit or TakeoffItem.Unit.COUNT,
             quantity=qty,
-            source=TakeoffItem.Source.AI_ASSISTED,
-            review_state=TakeoffItem.ReviewState.EDITED if overrides_provided else TakeoffItem.ReviewState.ACCEPTED,
-            created_by=user,
-            updated_by=user,
+            label=final_label,
+            assembly_profile=assembly_profile,
         )
+        if not components:
+            raise ValueError("No takeoff components were generated.")
+
+        created_takeoffs: list[TakeoffItem] = []
+        for component in components:
+            notes_parts = [f"From suggestion: {final_label or suggestion.id}"]
+            notes_suffix = component.get("notes_suffix")
+            if isinstance(notes_suffix, str) and notes_suffix.strip():
+                notes_parts.append(notes_suffix.strip())
+            created_takeoffs.append(
+                TakeoffItem.objects.create(
+                    project_id=plan_sheet.project_id,
+                    plan_set=plan_set,
+                    plan_sheet=plan_sheet,
+                    category=component["category"],
+                    unit=component["unit"],
+                    quantity=component["quantity"],
+                    notes=" | ".join(notes_parts),
+                    source=TakeoffItem.Source.AI_ASSISTED,
+                    review_state=TakeoffItem.ReviewState.EDITED if overrides_provided else TakeoffItem.ReviewState.ACCEPTED,
+                    created_by=user,
+                    updated_by=user,
+                )
+            )
+        takeoff = created_takeoffs[0]
         annotation.linked_takeoff_item = takeoff
         annotation.save(update_fields=["linked_takeoff_item", "updated_at"])
 
@@ -368,7 +513,13 @@ def accept_suggestion(
                 "AISuggestion",
                 str(suggestion.id),
                 project_id,
-                {"annotation_id": str(annotation.id), "takeoff_id": str(takeoff.id), "overrides": override_keys},
+                {
+                    "annotation_id": str(annotation.id),
+                    "takeoff_id": str(takeoff.id),
+                    "overrides": override_keys,
+                    "assembly_profile": resolved_profile,
+                    "component_count": len(created_takeoffs),
+                },
             )
         else:
             _record(
@@ -377,9 +528,93 @@ def accept_suggestion(
                 "AISuggestion",
                 str(suggestion.id),
                 project_id,
-                {"annotation_id": str(annotation.id), "takeoff_id": str(takeoff.id)},
+                {
+                    "annotation_id": str(annotation.id),
+                    "takeoff_id": str(takeoff.id),
+                    "assembly_profile": resolved_profile,
+                    "component_count": len(created_takeoffs),
+                },
             )
         return annotation, takeoff
+
+
+def create_takeoff_from_annotation(
+    annotation_id: str,
+    user,
+    *,
+    assembly_profile: str = ASSEMBLY_PROFILE_AUTO,
+) -> tuple[TakeoffItem, list[TakeoffItem], str]:
+    """Create one or more estimator takeoff rows from a chosen annotation."""
+    assembly_profile = _normalize_assembly_profile(assembly_profile)
+
+    with transaction.atomic():
+        annotation = (
+            AnnotationItem.objects.select_related("plan_sheet", "plan_sheet__plan_set")
+            .select_for_update()
+            .get(id=annotation_id)
+        )
+        if annotation.linked_takeoff_item_id:
+            raise ValueError("Annotation already has a linked takeoff item.")
+
+        plan_sheet = annotation.plan_sheet
+        plan_set = plan_sheet.plan_set
+        category, unit = _default_category_unit_for_suggestion(
+            annotation.label,
+            annotation.annotation_type,
+        )
+        estimated_quantity = _estimate_quantity_from_geometry(
+            annotation.geometry_json if isinstance(annotation.geometry_json, dict) else {},
+            unit,
+            plan_sheet,
+        )
+        components, resolved_profile = _expand_takeoff_components(
+            category=category,
+            unit=unit,
+            quantity=estimated_quantity,
+            label=annotation.label,
+            assembly_profile=assembly_profile,
+        )
+        if not components:
+            raise ValueError("No takeoff components were generated.")
+
+        created: list[TakeoffItem] = []
+        for component in components:
+            notes_parts = [f"From annotation: {annotation.label or annotation.id}"]
+            notes_suffix = component.get("notes_suffix")
+            if isinstance(notes_suffix, str) and notes_suffix.strip():
+                notes_parts.append(notes_suffix.strip())
+            created.append(
+                TakeoffItem.objects.create(
+                    project_id=plan_sheet.project_id,
+                    plan_set=plan_set,
+                    plan_sheet=plan_sheet,
+                    category=component["category"],
+                    unit=component["unit"],
+                    quantity=component["quantity"],
+                    notes=" | ".join(notes_parts),
+                    source=TakeoffItem.Source.MANUAL,
+                    review_state=TakeoffItem.ReviewState.PENDING,
+                    created_by=user,
+                    updated_by=user,
+                )
+            )
+
+        primary = created[0]
+        annotation.linked_takeoff_item = primary
+        annotation.save(update_fields=["linked_takeoff_item", "updated_at"])
+        _record(
+            "create_takeoff_from_annotation",
+            user,
+            "AnnotationItem",
+            str(annotation.id),
+            str(plan_sheet.project_id),
+            {
+                "takeoff_id": str(primary.id),
+                "assembly_profile": resolved_profile,
+                "component_count": len(created),
+            },
+        )
+        return primary, created[1:], resolved_profile
 
 
 def run_plan_analysis(

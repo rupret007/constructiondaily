@@ -17,7 +17,7 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 4. Open a sheet in the viewer.
 5. Create point/rectangle/polygon/polyline annotations directly on the canvas.
 6. (Optional) Set sheet calibration (full-sheet width/height + unit) to enable auto area/length quantity estimates.
-7. Create takeoff items manually or from selected annotations.
+7. Create takeoff items manually or from selected annotations (single-line or assembly package mode).
 8. Run AI analysis, then accept/reject/edit suggestions.
 9. Choose analysis provider per run (`mock`, `openai_vision` for PDF, or `cad_dxf` for DXF/DWG).
 10. Batch-accept high-confidence suggestions (default threshold 85%).
@@ -29,7 +29,11 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 - PDF rendering with zoom and drag pan.
 - CAD canvas preview for DXF/DWG sheets via normalized CAD entity geometry.
 - Layer visibility toggles.
-- Annotation inspector with delete and "create takeoff" actions.
+- Annotation inspector with delete and "create takeoff package" actions.
+- Annotation-to-takeoff package creation profiles:
+  - `auto` (detects door/window/fixture patterns)
+  - `none` (single-line takeoff only)
+  - `door_set`, `window_set`, `fixture_set` (explicit profile)
 - On-canvas geometry edit handles for point/rectangle/polygon/polyline annotations.
 - AI suggestion review panel with:
   - Accept
@@ -44,7 +48,14 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - `square_feet` from geometry when calibration exists
   - `linear_feet` from polyline/rectangle geometry when calibration exists
   - fallback to `1` when calibration or geometry is insufficient
-- Auto geometry-based quantity estimation when creating takeoff from a selected annotation.
+- Estimator-grade quantity normalization:
+  - configurable waste factors for linear/area units
+  - configurable round-up steps for linear/area/cubic units
+  - count/each quantities round up to whole units
+- Auto assembly expansion:
+  - accepted AI door suggestions create `doors` + `door_hardware` rows by default
+  - annotation package creation can output primary + extra rows
+- Auto geometry-based quantity estimation when creating a takeoff package from a selected annotation.
 - Snapshot create + lock.
 - Export record creation with JSON/CSV payload responses.
 
@@ -74,6 +85,11 @@ Set in `apps/api/.env`:
 - `PRECONSTRUCTION_CAD_PREVIEW_MAX_ITEMS=800`
 - `PRECONSTRUCTION_DWG_CONVERTER_COMMAND=...` (must include `{input}` and either `{output}` or `{output_dir}`)
 - `PRECONSTRUCTION_DWG_CONVERTER_TIMEOUT_SECONDS=180`
+- `PRECONSTRUCTION_LINEAR_ROUND_STEP_FEET=0.0001`
+- `PRECONSTRUCTION_AREA_ROUND_STEP_SQFT=0.0001`
+- `PRECONSTRUCTION_CUBIC_ROUND_STEP_CY=0.0001`
+- `PRECONSTRUCTION_LINEAR_WASTE_FACTOR=0`
+- `PRECONSTRUCTION_AREA_WASTE_FACTOR=0`
 
 ## API summary
 
@@ -85,6 +101,7 @@ Base path: `/api/preconstruction/`
 - `sheets/{id}/cad_preview/`: normalized CAD entity geometry for DXF/DWG canvas preview
 - `layers/`: annotation layers
 - `annotations/`: annotation CRUD
+- `annotations/{id}/create_takeoff/`: create takeoff package from one annotation (`assembly_profile` supported)
 - `takeoff/`: takeoff CRUD
 - `analysis/`: trigger/list AI analysis runs
 - `suggestions/`: list suggestions + accept/reject + batch_accept

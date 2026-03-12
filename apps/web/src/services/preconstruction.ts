@@ -160,6 +160,19 @@ export async function deleteAnnotation(annotationId: string): Promise<void> {
   return apiRequest<void>(`${P}/annotations/${annotationId}/`, { method: "DELETE" });
 }
 
+export async function createTakeoffFromAnnotation(
+  annotationId: string,
+  assemblyProfile: "auto" | "none" | "door_set" | "window_set" | "fixture_set" = "auto"
+): Promise<{ primary_takeoff: TakeoffItem; extra_takeoffs: TakeoffItem[]; assembly_profile: string }> {
+  return apiRequest<{ primary_takeoff: TakeoffItem; extra_takeoffs: TakeoffItem[]; assembly_profile: string }>(
+    `${P}/annotations/${annotationId}/create_takeoff/`,
+    {
+      method: "POST",
+      body: JSON.stringify({ assembly_profile: assemblyProfile }),
+    }
+  );
+}
+
 export async function fetchTakeoffItems(planSetId: string, planSheetId?: string): Promise<TakeoffItem[]> {
   let url = `${P}/takeoff/?plan_set=${planSetId}`;
   if (planSheetId) url += `&plan_sheet=${planSheetId}`;

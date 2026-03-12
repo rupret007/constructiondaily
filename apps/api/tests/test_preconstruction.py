@@ -465,6 +465,185 @@ class PreconstructionAPITests(TestCase):
         )
         self.assertEqual(ann_resp.status_code, 400)
 
+    def test_annotation_create_takeoff_auto_profile_generates_package(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        layer = AnnotationLayer.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            name="Doors",
+            created_by=self.user,
+        )
+        annotation = AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=plan_sheet,
+            layer=layer,
+            annotation_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.2, "width": 0.2, "height": 0.15},
+            label="Door D1",
+            source=AnnotationItem.Source.MANUAL,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        resp = self.client.post(
+            f"/api/preconstruction/annotations/{annotation.id}/create_takeoff/",
+            {"assembly_profile": "auto"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["assembly_profile"], "door_set")
+        self.assertEqual(data["primary_takeoff"]["category"], "doors")
+        self.assertEqual(len(data["extra_takeoffs"]), 1)
+        self.assertEqual(data["extra_takeoffs"][0]["category"], "door_hardware")
+        annotation.refresh_from_db()
+        self.assertIsNotNone(annotation.linked_takeoff_item_id)
+
+    def test_annotation_create_takeoff_none_profile_generates_single_line(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        layer = AnnotationLayer.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            name="Windows",
+            created_by=self.user,
+        )
+        annotation = AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=plan_sheet,
+            layer=layer,
+            annotation_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.2, "y": 0.2, "width": 0.2, "height": 0.15},
+            label="Door D2",
+            source=AnnotationItem.Source.MANUAL,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        resp = self.client.post(
+            f"/api/preconstruction/annotations/{annotation.id}/create_takeoff/",
+            {"assembly_profile": "none"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data["assembly_profile"], "none")
+        self.assertEqual(len(data["extra_takeoffs"]), 0)
+
+    def test_annotation_create_takeoff_rejects_when_already_linked(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        layer = AnnotationLayer.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            name="Doors",
+            created_by=self.user,
+        )
+        takeoff = TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity=1,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        annotation = AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=plan_sheet,
+            layer=layer,
+            annotation_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.2, "y": 0.2, "width": 0.2, "height": 0.15},
+            label="Door D3",
+            source=AnnotationItem.Source.MANUAL,
+            linked_takeoff_item=takeoff,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        resp = self.client.post(
+            f"/api/preconstruction/annotations/{annotation.id}/create_takeoff/",
+            {"assembly_profile": "auto"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("already has a linked takeoff", resp.json()["detail"])
+
+    def test_annotation_create_takeoff_rejects_invalid_assembly_profile(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        layer = AnnotationLayer.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            name="Doors",
+            created_by=self.user,
+        )
+        annotation = AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=plan_sheet,
+            layer=layer,
+            annotation_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.2, "y": 0.2, "width": 0.2, "height": 0.15},
+            label="Door D4",
+            source=AnnotationItem.Source.MANUAL,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        resp = self.client.post(
+            f"/api/preconstruction/annotations/{annotation.id}/create_takeoff/",
+            {"assembly_profile": []},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Invalid assembly_profile", resp.json()["detail"])
+
     def test_takeoff_item(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(
@@ -847,6 +1026,12 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(accept_resp.status_code, 200)
         self.assertIn("annotation", accept_resp.json())
         self.assertIn("takeoff", accept_resp.json())
+        self.assertTrue(
+            TakeoffItem.objects.filter(
+                plan_sheet=plan_sheet,
+                category=TakeoffItem.Category.DOOR_HARDWARE,
+            ).exists()
+        )
         suggestion.refresh_from_db()
         self.assertEqual(suggestion.decision_state, AISuggestion.DecisionState.ACCEPTED)
         self.assertGreaterEqual(
@@ -1064,6 +1249,51 @@ class PreconstructionAPITests(TestCase):
             format="json",
         )
         self.assertEqual(accept_resp.status_code, 400)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.decision_state, AISuggestion.DecisionState.PENDING)
+        self.assertEqual(TakeoffItem.objects.filter(plan_sheet=plan_sheet).count(), 0)
+        self.assertEqual(AnnotationItem.objects.filter(plan_sheet=plan_sheet).count(), 0)
+
+    def test_accept_suggestion_rejects_non_finite_quantity(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {"quantity": "NaN"},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 400)
+        self.assertIn("finite number", accept_resp.json()["detail"])
         suggestion.refresh_from_db()
         self.assertEqual(suggestion.decision_state, AISuggestion.DecisionState.PENDING)
         self.assertEqual(TakeoffItem.objects.filter(plan_sheet=plan_sheet).count(), 0)

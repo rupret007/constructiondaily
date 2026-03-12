@@ -44,6 +44,7 @@ from .services import (
     accept_suggestion,
     batch_accept_suggestions,
     build_snapshot_payload,
+    create_takeoff_from_annotation,
     create_export,
     create_export_record,
     reject_suggestion,
@@ -344,6 +345,30 @@ class AnnotationItemViewSet(viewsets.ModelViewSet):
             metadata={},
         )
         instance.delete()
+
+    @action(detail=True, methods=["post"], url_path="create_takeoff")
+    def create_takeoff(self, request, pk=None):
+        annotation = self.get_object()
+        if not user_has_project_role(request.user, str(annotation.project_id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
+        assembly_profile = request.data.get("assembly_profile", "auto")
+        try:
+            primary, extras, resolved_profile = create_takeoff_from_annotation(
+                str(annotation.id),
+                request.user,
+                assembly_profile=assembly_profile,
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "primary_takeoff": TakeoffItemSerializer(primary).data,
+                "extra_takeoffs": TakeoffItemSerializer(extras, many=True).data,
+                "assembly_profile": resolved_profile,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class TakeoffItemViewSet(viewsets.ModelViewSet):

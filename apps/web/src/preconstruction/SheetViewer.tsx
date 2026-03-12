@@ -15,6 +15,7 @@ import {
   createAnnotationLayer,
   createExport,
   createSnapshot,
+  createTakeoffFromAnnotation,
   createTakeoffItem,
   deleteAnnotation,
   fetchAnnotationLayers,
@@ -185,107 +186,6 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
-function getSheetDimensionsFeet(sheet: PlanSheet | null): { widthFeet: number; heightFeet: number } | null {
-  if (!sheet) return null;
-  const width = asNumber(sheet.calibrated_width);
-  const height = asNumber(sheet.calibrated_height);
-  if (!width || !height || width <= 0 || height <= 0) return null;
-  if (sheet.calibrated_unit === "meters") {
-    const metersToFeet = 3.28084;
-    return { widthFeet: width * metersToFeet, heightFeet: height * metersToFeet };
-  }
-  return { widthFeet: width, heightFeet: height };
-}
-
-function normalizedAreaFromGeometry(geometry: Record<string, unknown>): number | null {
-  if (geometry.type === "rectangle") {
-    const width = asNumber(geometry.width);
-    const height = asNumber(geometry.height);
-    if (width == null || height == null || width < 0 || height < 0) return null;
-    return width * height;
-  }
-  if (geometry.type === "polygon" && Array.isArray(geometry.points) && geometry.points.length >= 3) {
-    const points = geometry.points as Array<{ x: unknown; y: unknown }>;
-    let area = 0;
-    for (let i = 0; i < points.length; i++) {
-      const p1x = asNumber(points[i]?.x);
-      const p1y = asNumber(points[i]?.y);
-      const p2x = asNumber(points[(i + 1) % points.length]?.x);
-      const p2y = asNumber(points[(i + 1) % points.length]?.y);
-      if (p1x == null || p1y == null || p2x == null || p2y == null) return null;
-      area += (p1x * p2y) - (p2x * p1y);
-    }
-    return Math.abs(area) / 2;
-  }
-  return null;
-}
-
-function linearLengthFeetFromGeometry(
-  geometry: Record<string, unknown>,
-  dims: { widthFeet: number; heightFeet: number }
-): number | null {
-  if (geometry.type === "polyline" && Array.isArray(geometry.points) && geometry.points.length >= 2) {
-    const points = geometry.points as Array<{ x: unknown; y: unknown }>;
-    let total = 0;
-    for (let i = 1; i < points.length; i++) {
-      const x1 = asNumber(points[i - 1]?.x);
-      const y1 = asNumber(points[i - 1]?.y);
-      const x2 = asNumber(points[i]?.x);
-      const y2 = asNumber(points[i]?.y);
-      if (x1 == null || y1 == null || x2 == null || y2 == null) return null;
-      const dx = (x2 - x1) * dims.widthFeet;
-      const dy = (y2 - y1) * dims.heightFeet;
-      total += Math.sqrt(dx * dx + dy * dy);
-    }
-    return total;
-  }
-  if (geometry.type === "rectangle") {
-    const width = asNumber(geometry.width);
-    const height = asNumber(geometry.height);
-    if (width == null || height == null || width < 0 || height < 0) return null;
-    return (width * dims.widthFeet) + (height * dims.heightFeet);
-  }
-  return null;
-}
-
-function formatQuantity(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return "1";
-  return value.toFixed(4);
-}
-
-function estimateQuantityFromGeometry(
-  geometry: Record<string, unknown>,
-  unit: string,
-  sheet: PlanSheet | null
-): string {
-  if (unit === "square_feet") {
-    const explicit = asNumber(geometry.area_sqft);
-    if (explicit != null && explicit >= 0) return formatQuantity(explicit);
-    const dims = getSheetDimensionsFeet(sheet);
-    const normalizedArea = normalizedAreaFromGeometry(geometry);
-    if (dims && normalizedArea != null) {
-      return formatQuantity(normalizedArea * dims.widthFeet * dims.heightFeet);
-    }
-    return "1";
-  }
-  if (unit === "linear_feet") {
-    const explicit = asNumber(geometry.length_lf) ?? asNumber(geometry.length_linear_feet);
-    if (explicit != null && explicit >= 0) return formatQuantity(explicit);
-    const dims = getSheetDimensionsFeet(sheet);
-    if (dims) {
-      const measured = linearLengthFeetFromGeometry(geometry, dims);
-      if (measured != null) return formatQuantity(measured);
-    }
-    return "1";
-  }
-  if (unit === "cubic_yards") {
-    const explicit = asNumber(geometry.volume_cubic_yards);
-    if (explicit != null && explicit >= 0) return formatQuantity(explicit);
-    return "1";
-  }
-  return "1";
-}
-
 export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -306,6 +206,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [addTakeoffCategory, setAddTakeoffCategory] = useState("doors");
   const [addTakeoffQuantity, setAddTakeoffQuantity] = useState("1");
   const [addTakeoffUnit, setAddTakeoffUnit] = useState("count");
+  const [annotationAssemblyProfile, setAnnotationAssemblyProfile] = useState<"auto" | "none" | "door_set" | "window_set" | "fixture_set">("auto");
   const [creating, setCreating] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiRunning, setAiRunning] = useState(false);
@@ -727,21 +628,13 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const handleCreateTakeoffFromAnnotation = async (annotation: AnnotationItem) => {
     if (!sheet) return;
     setCreating(true);
+    setError("");
     try {
-      const inferred = defaultCategoryUnitForSuggestion(annotation.label, annotation.annotation_type);
-      const geometry = annotation.geometry_json as Record<string, unknown>;
-      const estimatedQuantity = estimateQuantityFromGeometry(geometry, inferred.unit, sheet);
-      await createTakeoffItem({
-        project: sheet.project,
-        plan_set: planSetId,
-        plan_sheet: sheetId,
-        category: inferred.category,
-        unit: inferred.unit,
-        quantity: estimatedQuantity,
-        notes: `From annotation: ${annotation.label || annotation.id}`,
-      });
+      await createTakeoffFromAnnotation(annotation.id, annotationAssemblyProfile);
       const list = await fetchTakeoffItems(planSetId, sheetId);
       setTakeoffItems(list);
+      const annList = await fetchAnnotations(sheetId);
+      setAnnotations(annList);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add takeoff.");
     } finally {
@@ -1453,9 +1346,25 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
                 <p className="empty-hint" style={{ margin: "0.25rem 0 0.5rem" }}>
                   Drag on-canvas handles to adjust geometry and save.
                 </p>
+                <div className="row" style={{ marginBottom: "0.5rem" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    Assembly:
+                    <select
+                      value={annotationAssemblyProfile}
+                      onChange={(e) => setAnnotationAssemblyProfile(e.target.value as "auto" | "none" | "door_set" | "window_set" | "fixture_set")}
+                      aria-label="Annotation assembly profile"
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="none">None (single line)</option>
+                      <option value="door_set">Door set</option>
+                      <option value="window_set">Window set</option>
+                      <option value="fixture_set">Fixture set</option>
+                    </select>
+                  </label>
+                </div>
                 <div className="row">
                   <button type="button" onClick={() => void handleCreateTakeoffFromAnnotation(ann)} disabled={creating}>
-                    Create takeoff from this (auto)
+                    Create takeoff package
                   </button>
                   <button type="button" onClick={() => void handleDeleteAnnotation(ann.id)}>
                     Delete
