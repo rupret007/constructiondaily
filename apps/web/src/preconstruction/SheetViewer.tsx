@@ -28,7 +28,9 @@ import {
   planSheetFileUrl,
   rejectSuggestion,
   triggerAnalysis,
+  updateAnnotation,
   updateAnnotationLayer,
+  updatePlanSheet,
 } from "../services/preconstruction";
 import type {
   AISuggestion,
@@ -149,6 +151,134 @@ function drawAnnotation(
   }
 }
 
+type PlacementMode = "none" | "point" | "rectangle" | "polygon" | "polyline";
+type RectCorner = "nw" | "ne" | "sw" | "se";
+type GeometryEditHandle =
+  | { type: "point" }
+  | { type: "rect_move"; offsetX: number; offsetY: number }
+  | { type: "rect_corner"; corner: RectCorner }
+  | { type: "vertex"; index: number };
+type GeometryEditState = {
+  annotationId: string;
+  originalGeometry: Record<string, unknown>;
+  geometry: Record<string, unknown>;
+  handle: GeometryEditHandle;
+};
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function getSheetDimensionsFeet(sheet: PlanSheet | null): { widthFeet: number; heightFeet: number } | null {
+  if (!sheet) return null;
+  const width = asNumber(sheet.calibrated_width);
+  const height = asNumber(sheet.calibrated_height);
+  if (!width || !height || width <= 0 || height <= 0) return null;
+  if (sheet.calibrated_unit === "meters") {
+    const metersToFeet = 3.28084;
+    return { widthFeet: width * metersToFeet, heightFeet: height * metersToFeet };
+  }
+  return { widthFeet: width, heightFeet: height };
+}
+
+function normalizedAreaFromGeometry(geometry: Record<string, unknown>): number | null {
+  if (geometry.type === "rectangle") {
+    const width = asNumber(geometry.width);
+    const height = asNumber(geometry.height);
+    if (width == null || height == null || width < 0 || height < 0) return null;
+    return width * height;
+  }
+  if (geometry.type === "polygon" && Array.isArray(geometry.points) && geometry.points.length >= 3) {
+    const points = geometry.points as Array<{ x: unknown; y: unknown }>;
+    let area = 0;
+    for (let i = 0; i < points.length; i++) {
+      const p1x = asNumber(points[i]?.x);
+      const p1y = asNumber(points[i]?.y);
+      const p2x = asNumber(points[(i + 1) % points.length]?.x);
+      const p2y = asNumber(points[(i + 1) % points.length]?.y);
+      if (p1x == null || p1y == null || p2x == null || p2y == null) return null;
+      area += (p1x * p2y) - (p2x * p1y);
+    }
+    return Math.abs(area) / 2;
+  }
+  return null;
+}
+
+function linearLengthFeetFromGeometry(
+  geometry: Record<string, unknown>,
+  dims: { widthFeet: number; heightFeet: number }
+): number | null {
+  if (geometry.type === "polyline" && Array.isArray(geometry.points) && geometry.points.length >= 2) {
+    const points = geometry.points as Array<{ x: unknown; y: unknown }>;
+    let total = 0;
+    for (let i = 1; i < points.length; i++) {
+      const x1 = asNumber(points[i - 1]?.x);
+      const y1 = asNumber(points[i - 1]?.y);
+      const x2 = asNumber(points[i]?.x);
+      const y2 = asNumber(points[i]?.y);
+      if (x1 == null || y1 == null || x2 == null || y2 == null) return null;
+      const dx = (x2 - x1) * dims.widthFeet;
+      const dy = (y2 - y1) * dims.heightFeet;
+      total += Math.sqrt(dx * dx + dy * dy);
+    }
+    return total;
+  }
+  if (geometry.type === "rectangle") {
+    const width = asNumber(geometry.width);
+    const height = asNumber(geometry.height);
+    if (width == null || height == null || width < 0 || height < 0) return null;
+    return (width * dims.widthFeet) + (height * dims.heightFeet);
+  }
+  return null;
+}
+
+function formatQuantity(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "1";
+  return value.toFixed(4);
+}
+
+function estimateQuantityFromGeometry(
+  geometry: Record<string, unknown>,
+  unit: string,
+  sheet: PlanSheet | null
+): string {
+  if (unit === "square_feet") {
+    const explicit = asNumber(geometry.area_sqft);
+    if (explicit != null && explicit >= 0) return formatQuantity(explicit);
+    const dims = getSheetDimensionsFeet(sheet);
+    const normalizedArea = normalizedAreaFromGeometry(geometry);
+    if (dims && normalizedArea != null) {
+      return formatQuantity(normalizedArea * dims.widthFeet * dims.heightFeet);
+    }
+    return "1";
+  }
+  if (unit === "linear_feet") {
+    const explicit = asNumber(geometry.length_lf) ?? asNumber(geometry.length_linear_feet);
+    if (explicit != null && explicit >= 0) return formatQuantity(explicit);
+    const dims = getSheetDimensionsFeet(sheet);
+    if (dims) {
+      const measured = linearLengthFeetFromGeometry(geometry, dims);
+      if (measured != null) return formatQuantity(measured);
+    }
+    return "1";
+  }
+  if (unit === "cubic_yards") {
+    const explicit = asNumber(geometry.volume_cubic_yards);
+    if (explicit != null && explicit >= 0) return formatQuantity(explicit);
+    return "1";
+  }
+  return "1";
+}
+
 export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -172,10 +302,12 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiRunning, setAiRunning] = useState(false);
   const [batchAccepting, setBatchAccepting] = useState(false);
-  const [placementMode, setPlacementMode] = useState<"none" | "point" | "rectangle">("none");
+  const [placementMode, setPlacementMode] = useState<PlacementMode>("none");
   const [placementLabel, setPlacementLabel] = useState("");
   const [rectDragStart, setRectDragStart] = useState<{ x: number; y: number } | null>(null);
   const [rectDragCurrent, setRectDragCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [draftPathPoints, setDraftPathPoints] = useState<Array<{ x: number; y: number }>>([]);
+  const [geometryEdit, setGeometryEdit] = useState<GeometryEditState | null>(null);
   const [suggestions, setSuggestions] = useState<AISuggestion[]>([]);
   const [snapshots, setSnapshots] = useState<RevisionSnapshot[]>([]);
   const [exports, setExports] = useState<ExportRecord[]>([]);
@@ -186,6 +318,11 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [editCategory, setEditCategory] = useState("doors");
   const [editUnit, setEditUnit] = useState("count");
   const [editQuantity, setEditQuantity] = useState("1");
+  const [analysisProvider, setAnalysisProvider] = useState<"mock" | "openai_vision">("mock");
+  const [calibrationWidth, setCalibrationWidth] = useState("");
+  const [calibrationHeight, setCalibrationHeight] = useState("");
+  const [calibrationUnit, setCalibrationUnit] = useState<"feet" | "meters">("feet");
+  const [savingCalibration, setSavingCalibration] = useState(false);
 
   const loadSheetAndData = useCallback(async () => {
     setLoading(true);
@@ -196,6 +333,9 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         fetchAnnotationLayers(sheetId),
       ]);
       setSheet(sheetData);
+      setCalibrationWidth(sheetData.calibrated_width != null ? String(sheetData.calibrated_width) : "");
+      setCalibrationHeight(sheetData.calibrated_height != null ? String(sheetData.calibrated_height) : "");
+      setCalibrationUnit(sheetData.calibrated_unit ?? "feet");
       setLayers(layersData);
       const width = sheetData.width != null ? Number(sheetData.width) : 612;
       const height = sheetData.height != null ? Number(sheetData.height) : 792;
@@ -218,7 +358,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
 
   const addAnnotationWithGeometry = async (
     geometry_json: Record<string, unknown>,
-    annotationType: "point" | "rectangle",
+    annotationType: "point" | "rectangle" | "polygon" | "polyline",
     label: string
   ) => {
     if (!sheet) return;
@@ -261,41 +401,245 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     return { x, y };
   };
 
+  const clearPlacementState = useCallback(() => {
+    setPlacementMode("none");
+    setRectDragStart(null);
+    setRectDragCurrent(null);
+    setDraftPathPoints([]);
+  }, []);
+
+  const commitGeometryEdit = useCallback(async (edit: GeometryEditState) => {
+    const before = JSON.stringify(edit.originalGeometry);
+    const after = JSON.stringify(edit.geometry);
+    if (before === after) return;
+    try {
+      await updateAnnotation(edit.annotationId, { geometry_json: edit.geometry });
+      await loadSheetAndData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update annotation geometry.");
+    }
+  }, [loadSheetAndData]);
+
+  const applyGeometryEdit = useCallback((edit: GeometryEditState, coords: { x: number; y: number }) => {
+    const clamped = { x: clamp01(coords.x), y: clamp01(coords.y) };
+    const geometry = edit.originalGeometry;
+
+    if (edit.handle.type === "point") {
+      return { ...geometry, type: "point", x: clamped.x, y: clamped.y };
+    }
+
+    if (edit.handle.type === "rect_move" && geometry.type === "rectangle") {
+      const width = asNumber(geometry.width);
+      const height = asNumber(geometry.height);
+      if (width == null || height == null) return edit.geometry;
+      const x = clamp01(clamped.x - edit.handle.offsetX);
+      const y = clamp01(clamped.y - edit.handle.offsetY);
+      return {
+        ...geometry,
+        type: "rectangle",
+        x: Math.min(x, 1 - width),
+        y: Math.min(y, 1 - height),
+        width,
+        height,
+      };
+    }
+
+    if (edit.handle.type === "rect_corner" && geometry.type === "rectangle") {
+      const x = asNumber(geometry.x);
+      const y = asNumber(geometry.y);
+      const width = asNumber(geometry.width);
+      const height = asNumber(geometry.height);
+      if (x == null || y == null || width == null || height == null) return edit.geometry;
+      const left = x;
+      const right = x + width;
+      const top = y;
+      const bottom = y + height;
+      let nx = clamped.x;
+      let ny = clamped.y;
+      let ax = left;
+      let ay = top;
+      if (edit.handle.corner === "nw") {
+        ax = right;
+        ay = bottom;
+      } else if (edit.handle.corner === "ne") {
+        ax = left;
+        ay = bottom;
+      } else if (edit.handle.corner === "sw") {
+        ax = right;
+        ay = top;
+      } else if (edit.handle.corner === "se") {
+        ax = left;
+        ay = top;
+      }
+      nx = clamp01(nx);
+      ny = clamp01(ny);
+      const rx = Math.min(nx, ax);
+      const ry = Math.min(ny, ay);
+      const rw = Math.max(0.001, Math.abs(ax - nx));
+      const rh = Math.max(0.001, Math.abs(ay - ny));
+      return { ...geometry, type: "rectangle", x: rx, y: ry, width: rw, height: rh };
+    }
+
+    if (edit.handle.type === "vertex" && Array.isArray(geometry.points)) {
+      const vertexIndex = edit.handle.index;
+      const points = geometry.points as Array<{ x: number; y: number }>;
+      if (vertexIndex < 0 || vertexIndex >= points.length) return edit.geometry;
+      const nextPoints = points.map((point, idx) => (idx === vertexIndex ? clamped : point));
+      return { ...geometry, points: nextPoints };
+    }
+
+    return edit.geometry;
+  }, []);
+
+  const startGeometryEdit = useCallback(
+    (coords: { x: number; y: number }): GeometryEditState | null => {
+      if (!selectedAnnotationId) return null;
+      const annotation = annotations.find((item) => item.id === selectedAnnotationId);
+      if (!annotation) return null;
+      const geometry = annotation.geometry_json as Record<string, unknown>;
+      const canvas = canvasRef.current;
+      if (!canvas) return null;
+      const thresholdPx = 10;
+      const pointPx = normToScreen(coords.x, coords.y, canvas.width, canvas.height);
+
+      if (geometry.type === "point") {
+        const gx = asNumber(geometry.x);
+        const gy = asNumber(geometry.y);
+        if (gx == null || gy == null) return null;
+        const gpx = normToScreen(gx, gy, canvas.width, canvas.height);
+        const distance = Math.hypot(gpx.x - pointPx.x, gpx.y - pointPx.y);
+        if (distance <= thresholdPx) {
+          return {
+            annotationId: annotation.id,
+            originalGeometry: geometry,
+            geometry,
+            handle: { type: "point" },
+          };
+        }
+        return null;
+      }
+
+      if (geometry.type === "rectangle") {
+        const x = asNumber(geometry.x);
+        const y = asNumber(geometry.y);
+        const width = asNumber(geometry.width);
+        const height = asNumber(geometry.height);
+        if (x == null || y == null || width == null || height == null) return null;
+        const corners: Record<RectCorner, { x: number; y: number }> = {
+          nw: normToScreen(x, y, canvas.width, canvas.height),
+          ne: normToScreen(x + width, y, canvas.width, canvas.height),
+          sw: normToScreen(x, y + height, canvas.width, canvas.height),
+          se: normToScreen(x + width, y + height, canvas.width, canvas.height),
+        };
+        for (const corner of ["nw", "ne", "sw", "se"] as RectCorner[]) {
+          const distance = Math.hypot(corners[corner].x - pointPx.x, corners[corner].y - pointPx.y);
+          if (distance <= thresholdPx) {
+            return {
+              annotationId: annotation.id,
+              originalGeometry: geometry,
+              geometry,
+              handle: { type: "rect_corner", corner },
+            };
+          }
+        }
+        if (coords.x >= x && coords.x <= x + width && coords.y >= y && coords.y <= y + height) {
+          return {
+            annotationId: annotation.id,
+            originalGeometry: geometry,
+            geometry,
+            handle: { type: "rect_move", offsetX: coords.x - x, offsetY: coords.y - y },
+          };
+        }
+        return null;
+      }
+
+      if ((geometry.type === "polygon" || geometry.type === "polyline") && Array.isArray(geometry.points)) {
+        const points = geometry.points as Array<{ x: unknown; y: unknown }>;
+        for (let i = 0; i < points.length; i++) {
+          const px = asNumber(points[i]?.x);
+          const py = asNumber(points[i]?.y);
+          if (px == null || py == null) continue;
+          const p = normToScreen(px, py, canvas.width, canvas.height);
+          const distance = Math.hypot(p.x - pointPx.x, p.y - pointPx.y);
+          if (distance <= thresholdPx) {
+            return {
+              annotationId: annotation.id,
+              originalGeometry: geometry,
+              geometry,
+              handle: { type: "vertex", index: i },
+            };
+          }
+        }
+      }
+      return null;
+    },
+    [annotations, selectedAnnotationId]
+  );
+
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (e.button !== 0 || creating) return;
+    const coords = getNormalizedCoords(e);
+    if (!coords) return;
+
     if (placementMode === "point") {
-      const coords = getNormalizedCoords(e);
-      if (coords) {
-        e.stopPropagation();
-        void addAnnotationWithGeometry(
-          { type: "point", x: coords.x, y: coords.y },
-          "point",
-          placementLabel || "Point"
-        );
-        setPlacementMode("none");
-      }
-    } else if (placementMode === "rectangle") {
-      const coords = getNormalizedCoords(e);
-      if (coords) {
-        e.stopPropagation();
-        setRectDragStart(coords);
-        setRectDragCurrent(coords);
-      }
+      e.stopPropagation();
+      void addAnnotationWithGeometry(
+        { type: "point", x: coords.x, y: coords.y },
+        "point",
+        placementLabel || "Point"
+      );
+      clearPlacementState();
+      return;
+    }
+
+    if (placementMode === "rectangle") {
+      e.stopPropagation();
+      setRectDragStart(coords);
+      setRectDragCurrent(coords);
+      return;
+    }
+
+    if (placementMode === "polygon" || placementMode === "polyline") {
+      e.stopPropagation();
+      setDraftPathPoints((prev) => [...prev, coords]);
+      return;
+    }
+
+    const edit = startGeometryEdit(coords);
+    if (edit) {
+      e.stopPropagation();
+      setGeometryEdit(edit);
     }
   };
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const coords = getNormalizedCoords(e);
+    if (!coords) return;
+
+    if (geometryEdit) {
+      e.stopPropagation();
+      setGeometryEdit((current) => {
+        if (!current) return current;
+        const updatedGeometry = applyGeometryEdit(current, coords);
+        return { ...current, geometry: updatedGeometry };
+      });
+      return;
+    }
+
     if (placementMode === "rectangle" && rectDragStart) {
-      const coords = getNormalizedCoords(e);
-      if (coords) {
-        e.stopPropagation();
-        setRectDragCurrent(coords);
-      }
+      e.stopPropagation();
+      setRectDragCurrent(coords);
     }
   };
 
   const handleCanvasMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (e.button !== 0) return;
+    if (geometryEdit) {
+      const editToCommit = geometryEdit;
+      setGeometryEdit(null);
+      void commitGeometryEdit(editToCommit);
+      return;
+    }
     if (placementMode === "rectangle" && rectDragStart && rectDragCurrent) {
       const x = Math.min(rectDragStart.x, rectDragCurrent.x);
       const y = Math.min(rectDragStart.y, rectDragCurrent.y);
@@ -308,20 +652,34 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           placementLabel || "New area"
         );
       }
-      setPlacementMode("none");
-      setRectDragStart(null);
-      setRectDragCurrent(null);
+      clearPlacementState();
     }
   };
 
-  const addAnnotation = (annotationType: "point" | "rectangle", label: string) => {
-    if (placementMode !== "none") {
-      setPlacementMode("none");
-      setRectDragStart(null);
-      setRectDragCurrent(null);
-    }
+  const addAnnotation = (annotationType: PlacementMode, label: string) => {
+    if (placementMode !== "none") clearPlacementState();
     setPlacementLabel(label);
     setPlacementMode(annotationType);
+  };
+
+  const finishPathAnnotation = () => {
+    if (placementMode !== "polygon" && placementMode !== "polyline") return;
+    const minPoints = placementMode === "polygon" ? 3 : 2;
+    if (draftPathPoints.length < minPoints) {
+      setError(
+        placementMode === "polygon"
+          ? "Polygon requires at least 3 points."
+          : "Polyline requires at least 2 points."
+      );
+      return;
+    }
+    const points = [...draftPathPoints];
+    void addAnnotationWithGeometry(
+      { type: placementMode, points },
+      placementMode,
+      placementLabel || (placementMode === "polygon" ? "New polygon" : "New polyline")
+    );
+    clearPlacementState();
   };
 
   const handleDeleteAnnotation = async (annotationId: string) => {
@@ -339,16 +697,18 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     if (!sheet) return;
     setCreating(true);
     try {
+      const inferred = defaultCategoryUnitForSuggestion(annotation.label, annotation.annotation_type);
+      const geometry = annotation.geometry_json as Record<string, unknown>;
+      const estimatedQuantity = estimateQuantityFromGeometry(geometry, inferred.unit, sheet);
       await createTakeoffItem({
         project: sheet.project,
         plan_set: planSetId,
         plan_sheet: sheetId,
-        category: addTakeoffCategory,
-        unit: addTakeoffUnit,
-        quantity: addTakeoffQuantity,
+        category: inferred.category,
+        unit: inferred.unit,
+        quantity: estimatedQuantity,
         notes: `From annotation: ${annotation.label || annotation.id}`,
       });
-      setAddTakeoffQuantity("1");
       const list = await fetchTakeoffItems(planSetId, sheetId);
       setTakeoffItems(list);
     } catch (e) {
@@ -404,13 +764,24 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   useEffect(() => {
     if (!rectDragStart || placementMode !== "rectangle") return;
     const onGlobalMouseUp = () => {
-      setRectDragStart(null);
-      setRectDragCurrent(null);
-      setPlacementMode("none");
+      clearPlacementState();
     };
     window.addEventListener("mouseup", onGlobalMouseUp);
     return () => window.removeEventListener("mouseup", onGlobalMouseUp);
-  }, [rectDragStart, placementMode]);
+  }, [rectDragStart, placementMode, clearPlacementState]);
+
+  useEffect(() => {
+    if (!geometryEdit) return;
+    const onGlobalMouseUp = () => {
+      setGeometryEdit((current) => {
+        if (!current) return current;
+        void commitGeometryEdit(current);
+        return null;
+      });
+    };
+    window.addEventListener("mouseup", onGlobalMouseUp);
+    return () => window.removeEventListener("mouseup", onGlobalMouseUp);
+  }, [geometryEdit, commitGeometryEdit]);
 
   useEffect(() => {
     if (sheetId) void loadSuggestions();
@@ -419,11 +790,45 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     void loadSnapshotsAndExports();
   }, [loadSnapshotsAndExports]);
 
+  const handleSaveCalibration = async () => {
+    if (!sheet) return;
+    setSavingCalibration(true);
+    setError("");
+    try {
+      const width = calibrationWidth.trim();
+      const height = calibrationHeight.trim();
+      const widthNum = width === "" ? null : Number(width);
+      const heightNum = height === "" ? null : Number(height);
+      if (widthNum != null && (!Number.isFinite(widthNum) || widthNum <= 0)) {
+        throw new Error("Calibrated width must be a positive number.");
+      }
+      if (heightNum != null && (!Number.isFinite(heightNum) || heightNum <= 0)) {
+        throw new Error("Calibrated height must be a positive number.");
+      }
+      if ((widthNum != null && heightNum == null) || (widthNum == null && heightNum != null)) {
+        throw new Error("Provide both calibrated width and calibrated height, or leave both empty.");
+      }
+      const updated = await updatePlanSheet(sheetId, {
+        calibrated_width: widthNum,
+        calibrated_height: heightNum,
+        calibrated_unit: calibrationUnit,
+      });
+      setSheet(updated);
+      setCalibrationWidth(updated.calibrated_width != null ? String(updated.calibrated_width) : "");
+      setCalibrationHeight(updated.calibrated_height != null ? String(updated.calibrated_height) : "");
+      setCalibrationUnit(updated.calibrated_unit ?? "feet");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save calibration.");
+    } finally {
+      setSavingCalibration(false);
+    }
+  };
+
   const handleRunAnalysis = async () => {
     setAiRunning(true);
     setError("");
     try {
-      await triggerAnalysis(sheetId, aiPrompt);
+      await triggerAnalysis(sheetId, aiPrompt, analysisProvider);
       await loadSuggestions();
       await loadSheetAndData();
     } catch (e) {
@@ -554,23 +959,93 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       const pw = viewport.width;
       const ph = viewport.height;
       const drawOverlays = () => {
-      const visibleLayers = layers.filter((l) => l.is_visible);
-      const layerIds = new Set(visibleLayers.map((l) => l.id));
-      const toDraw = annotations.filter((a) => layerIds.has(a.layer));
-      toDraw.forEach((item) => drawAnnotation(ctx, item, pw, ph));
-      if (rectDragStart && rectDragCurrent) {
-        const x = Math.min(rectDragStart.x, rectDragCurrent.x);
-        const y = Math.min(rectDragStart.y, rectDragCurrent.y);
-        const width = Math.abs(rectDragCurrent.x - rectDragStart.x);
-        const height = Math.abs(rectDragCurrent.y - rectDragStart.y);
-        drawAnnotation(
-          ctx,
-          { geometry_json: { type: "rectangle", x, y, width, height }, label: "" },
-          pw,
-          ph,
-          "rgba(59, 130, 246, 0.3)"
-        );
-      }
+        const visibleLayers = layers.filter((l) => l.is_visible);
+        const layerIds = new Set(visibleLayers.map((l) => l.id));
+        const toDraw = annotations.filter((a) => layerIds.has(a.layer));
+        toDraw.forEach((item) => {
+          if (geometryEdit && item.id === geometryEdit.annotationId) {
+            drawAnnotation(
+              ctx,
+              { geometry_json: geometryEdit.geometry, label: item.label },
+              pw,
+              ph,
+              "rgba(16, 185, 129, 0.35)"
+            );
+            return;
+          }
+          drawAnnotation(ctx, item, pw, ph);
+        });
+
+        if (rectDragStart && rectDragCurrent) {
+          const x = Math.min(rectDragStart.x, rectDragCurrent.x);
+          const y = Math.min(rectDragStart.y, rectDragCurrent.y);
+          const width = Math.abs(rectDragCurrent.x - rectDragStart.x);
+          const height = Math.abs(rectDragCurrent.y - rectDragStart.y);
+          drawAnnotation(
+            ctx,
+            { geometry_json: { type: "rectangle", x, y, width, height }, label: "" },
+            pw,
+            ph,
+            "rgba(59, 130, 246, 0.3)"
+          );
+        }
+
+        if ((placementMode === "polygon" || placementMode === "polyline") && draftPathPoints.length > 0) {
+          drawAnnotation(
+            ctx,
+            { geometry_json: { type: placementMode, points: draftPathPoints }, label: "" },
+            pw,
+            ph,
+            "rgba(59, 130, 246, 0.3)"
+          );
+          ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+          draftPathPoints.forEach((point) => {
+            const p = normToScreen(point.x, point.y, pw, ph);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        }
+
+        const selected = toDraw.find((a) => a.id === selectedAnnotationId);
+        if (selected) {
+          const selectedGeometry =
+            geometryEdit && geometryEdit.annotationId === selected.id
+              ? geometryEdit.geometry
+              : (selected.geometry_json as Record<string, unknown>);
+          const drawHandle = (xNorm: number, yNorm: number) => {
+            const p = normToScreen(xNorm, yNorm, pw, ph);
+            const size = 8;
+            ctx.fillStyle = "#f8fafc";
+            ctx.strokeStyle = "#0f172a";
+            ctx.lineWidth = 1;
+            ctx.fillRect(p.x - size / 2, p.y - size / 2, size, size);
+            ctx.strokeRect(p.x - size / 2, p.y - size / 2, size, size);
+          };
+          if (selectedGeometry.type === "point") {
+            const x = asNumber(selectedGeometry.x);
+            const y = asNumber(selectedGeometry.y);
+            if (x != null && y != null) drawHandle(x, y);
+          } else if (selectedGeometry.type === "rectangle") {
+            const x = asNumber(selectedGeometry.x);
+            const y = asNumber(selectedGeometry.y);
+            const width = asNumber(selectedGeometry.width);
+            const height = asNumber(selectedGeometry.height);
+            if (x != null && y != null && width != null && height != null) {
+              drawHandle(x, y);
+              drawHandle(x + width, y);
+              drawHandle(x, y + height);
+              drawHandle(x + width, y + height);
+            }
+          } else if ((selectedGeometry.type === "polygon" || selectedGeometry.type === "polyline") && Array.isArray(selectedGeometry.points)) {
+            const points = selectedGeometry.points as Array<{ x: unknown; y: unknown }>;
+            points.forEach((point) => {
+              const x = asNumber(point.x);
+              const y = asNumber(point.y);
+              if (x != null && y != null) drawHandle(x, y);
+            });
+          }
+        }
       };
       const task = page.render(renderContext);
       if (task.promise) {
@@ -579,7 +1054,18 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         drawOverlays();
       }
     });
-  }, [pdfDoc, scale, layers, annotations, rectDragStart, rectDragCurrent]);
+  }, [
+    pdfDoc,
+    scale,
+    layers,
+    annotations,
+    rectDragStart,
+    rectDragCurrent,
+    placementMode,
+    draftPathPoints,
+    selectedAnnotationId,
+    geometryEdit,
+  ]);
 
   if (loading && !sheet) {
     return (
@@ -620,12 +1106,14 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
               ? placementMode === "point"
                 ? "crosshair"
                 : "crosshair"
+              : geometryEdit
+                ? "grabbing"
               : isPanning
                 ? "grabbing"
                 : "grab",
         }}
         onMouseDown={(e) => {
-          if (e.button !== 0 || placementMode !== "none") return;
+          if (e.button !== 0 || placementMode !== "none" || geometryEdit) return;
           setIsPanning(true);
           panStartRef.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
         }}
@@ -645,9 +1133,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
             onMouseUp={handleCanvasMouseUp}
             onMouseLeave={() => {
               if (placementMode === "rectangle" && rectDragStart) {
-                setRectDragStart(null);
-                setRectDragCurrent(null);
-                setPlacementMode("none");
+                clearPlacementState();
               }
             }}
           />
@@ -725,6 +1211,43 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           </div>
         </div>
       </div>
+      <div className="row sheet-viewer-sidebars">
+        <div className="card" style={{ flex: "1" }}>
+          <h4>Sheet calibration</h4>
+          <p className="empty-hint" style={{ marginTop: 0 }}>
+            Set full-sheet real-world size to auto-calculate area/linear quantities for accepted AI suggestions.
+          </p>
+          <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+            <input
+              type="text"
+              value={calibrationWidth}
+              onChange={(e) => setCalibrationWidth(e.target.value)}
+              placeholder="Width"
+              aria-label="Calibrated width"
+              style={{ width: "6rem" }}
+            />
+            <input
+              type="text"
+              value={calibrationHeight}
+              onChange={(e) => setCalibrationHeight(e.target.value)}
+              placeholder="Height"
+              aria-label="Calibrated height"
+              style={{ width: "6rem" }}
+            />
+            <select
+              value={calibrationUnit}
+              onChange={(e) => setCalibrationUnit(e.target.value as "feet" | "meters")}
+              aria-label="Calibration unit"
+            >
+              <option value="feet">Feet</option>
+              <option value="meters">Meters</option>
+            </select>
+            <button type="button" onClick={() => void handleSaveCalibration()} disabled={savingCalibration}>
+              {savingCalibration ? "Saving..." : "Save calibration"}
+            </button>
+          </div>
+        </div>
+      </div>
       <div className="row sheet-viewer-annotation-tools" style={{ alignItems: "center", gap: "0.5rem" }}>
         <button
           type="button"
@@ -742,15 +1265,53 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         >
           Add rectangle
         </button>
+        <button
+          type="button"
+          onClick={() => addAnnotation("polygon", "New polygon")}
+          disabled={creating}
+          className={placementMode === "polygon" ? "selected" : ""}
+        >
+          Add polygon
+        </button>
+        <button
+          type="button"
+          onClick={() => addAnnotation("polyline", "New polyline")}
+          disabled={creating}
+          className={placementMode === "polyline" ? "selected" : ""}
+        >
+          Add polyline
+        </button>
         {placementMode !== "none" && (
           <span style={{ fontSize: "0.9rem", color: "#64748b" }}>
             {placementMode === "point"
               ? "Click on the plan to place a point"
-              : "Click and drag on the plan to draw a rectangle"}
+              : placementMode === "rectangle"
+                ? "Click and drag on the plan to draw a rectangle"
+                : placementMode === "polygon"
+                  ? `Click to add polygon vertices (${draftPathPoints.length} points).`
+                  : `Click to add polyline vertices (${draftPathPoints.length} points).`}
           </span>
         )}
+        {(placementMode === "polygon" || placementMode === "polyline") && (
+          <>
+            <button
+              type="button"
+              onClick={finishPathAnnotation}
+              disabled={creating || (placementMode === "polygon" ? draftPathPoints.length < 3 : draftPathPoints.length < 2)}
+            >
+              Finish shape
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraftPathPoints((prev) => prev.slice(0, -1))}
+              disabled={draftPathPoints.length === 0}
+            >
+              Undo point
+            </button>
+          </>
+        )}
         {placementMode !== "none" && (
-          <button type="button" onClick={() => setPlacementMode("none")}>
+          <button type="button" onClick={clearPlacementState}>
             Cancel
           </button>
         )}
@@ -759,7 +1320,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         <div className="card" style={{ flex: "0 0 220px" }}>
           <h4>Annotations</h4>
           {annotations.length === 0 ? (
-            <p className="empty-hint">No annotations yet. Add a point or rectangle above.</p>
+            <p className="empty-hint">No annotations yet. Add a point, rectangle, polygon, or polyline above.</p>
           ) : (
             <ul style={{ listStyle: "none", padding: 0 }}>
               {annotations.map((ann) => (
@@ -789,9 +1350,12 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
                 <p><strong>Notes:</strong> {ann.notes || "-"}</p>
                 <p><strong>Source:</strong> {ann.source}</p>
                 <p><strong>Review state:</strong> {ann.review_state}</p>
+                <p className="empty-hint" style={{ margin: "0.25rem 0 0.5rem" }}>
+                  Drag on-canvas handles to adjust geometry and save.
+                </p>
                 <div className="row">
                   <button type="button" onClick={() => void handleCreateTakeoffFromAnnotation(ann)} disabled={creating}>
-                    Create takeoff from this
+                    Create takeoff from this (auto)
                   </button>
                   <button type="button" onClick={() => void handleDeleteAnnotation(ann.id)}>
                     Delete
@@ -829,6 +1393,14 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         ))}
       </div>
       <div className="row">
+        <select
+          value={analysisProvider}
+          onChange={(e) => setAnalysisProvider(e.target.value as "mock" | "openai_vision")}
+          aria-label="Analysis provider"
+        >
+          <option value="mock">Mock provider</option>
+          <option value="openai_vision">OpenAI vision provider</option>
+        </select>
         <input
           type="text"
           value={aiPrompt}

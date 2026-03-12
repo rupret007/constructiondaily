@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -47,6 +48,7 @@ from .services import (
     reject_suggestion,
     run_plan_analysis,
 )
+from .providers.registry import get_provider
 from .storage import get_plan_file_path, store_plan_file
 from .validators import validate_plan_upload
 
@@ -385,17 +387,22 @@ class AIAnalysisRunViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         plan_sheet_id = request.data.get("plan_sheet")
         user_prompt = request.data.get("user_prompt", "")
+        provider_name = request.data.get("provider_name") or settings.PRECONSTRUCTION_ANALYSIS_PROVIDER
         if not plan_sheet_id:
             return Response(
                 {"detail": "plan_sheet is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        try:
+            get_provider(provider_name)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         plan_sheet = get_object_or_404(PlanSheet, id=plan_sheet_id)
         if plan_sheet.project_id not in _project_ids_for_user(request.user):
             raise PermissionDenied("Insufficient permissions.")
         if not user_has_project_role(request.user, str(plan_sheet.project_id), PROJECT_WRITE_ROLES):
             raise PermissionDenied("Insufficient permissions.")
-        run = run_plan_analysis(plan_sheet, user_prompt, request.user)
+        run = run_plan_analysis(plan_sheet, user_prompt, request.user, provider_name=provider_name)
         serializer = self.get_serializer(run)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 

@@ -5,11 +5,12 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
-from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -78,6 +79,144 @@ def _default_category_unit_for_suggestion(label: str | None, suggestion_type: st
     if suggestion_type == "polygon":
         return TakeoffItem.Category.CONCRETE_AREAS, TakeoffItem.Unit.SQUARE_FEET
     return TakeoffItem.Category.CUSTOM, TakeoffItem.Unit.COUNT
+
+
+def _decimal_or_none(value: Any) -> Decimal | None:
+    try:
+        if value is None:
+            return None
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _normalized_polygon_area(points: list[dict[str, Any]]) -> Decimal | None:
+    if len(points) < 3:
+        return None
+    parsed: list[tuple[Decimal, Decimal]] = []
+    for point in points:
+        if not isinstance(point, dict):
+            return None
+        x = _decimal_or_none(point.get("x"))
+        y = _decimal_or_none(point.get("y"))
+        if x is None or y is None:
+            return None
+        parsed.append((x, y))
+    area = Decimal("0")
+    for i in range(len(parsed)):
+        x1, y1 = parsed[i]
+        x2, y2 = parsed[(i + 1) % len(parsed)]
+        area += (x1 * y2) - (x2 * y1)
+    return abs(area) / Decimal("2")
+
+
+def _geometry_normalized_area(geometry_json: dict[str, Any]) -> Decimal | None:
+    gtype = geometry_json.get("type")
+    if gtype == "rectangle":
+        width = _decimal_or_none(geometry_json.get("width"))
+        height = _decimal_or_none(geometry_json.get("height"))
+        if width is None or height is None:
+            return None
+        if width < 0 or height < 0:
+            return None
+        return width * height
+    if gtype == "polygon":
+        points = geometry_json.get("points")
+        if not isinstance(points, list):
+            return None
+        return _normalized_polygon_area(points)
+    return None
+
+
+def _geometry_scaled_polyline_length_feet(
+    geometry_json: dict[str, Any], sheet_width_feet: Decimal, sheet_height_feet: Decimal
+) -> Decimal | None:
+    gtype = geometry_json.get("type")
+    if gtype != "polyline":
+        return None
+    points = geometry_json.get("points")
+    if not isinstance(points, list) or len(points) < 2:
+        return None
+
+    parsed: list[tuple[Decimal, Decimal]] = []
+    for point in points:
+        if not isinstance(point, dict):
+            return None
+        x = _decimal_or_none(point.get("x"))
+        y = _decimal_or_none(point.get("y"))
+        if x is None or y is None:
+            return None
+        parsed.append((x, y))
+
+    total = Decimal("0")
+    for i in range(1, len(parsed)):
+        x1, y1 = parsed[i - 1]
+        x2, y2 = parsed[i]
+        dx_feet = (x2 - x1) * sheet_width_feet
+        dy_feet = (y2 - y1) * sheet_height_feet
+        segment = math.sqrt(float(dx_feet * dx_feet + dy_feet * dy_feet))
+        total += Decimal(str(segment))
+    return total
+
+
+def _calibrated_sheet_dimensions_feet(plan_sheet: PlanSheet) -> tuple[Decimal, Decimal] | None:
+    width = _decimal_or_none(getattr(plan_sheet, "calibrated_width", None))
+    height = _decimal_or_none(getattr(plan_sheet, "calibrated_height", None))
+    if width is None or height is None:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    calibrated_unit = getattr(plan_sheet, "calibrated_unit", PlanSheet.CalibrationUnit.FEET)
+    if calibrated_unit == PlanSheet.CalibrationUnit.METERS:
+        meters_to_feet = Decimal("3.28084")
+        width *= meters_to_feet
+        height *= meters_to_feet
+    return width, height
+
+
+def _estimate_quantity_from_geometry(
+    geometry_json: dict[str, Any] | None, unit: str, plan_sheet: PlanSheet
+) -> Decimal:
+    geometry = geometry_json if isinstance(geometry_json, dict) else {}
+
+    # Provider-supplied explicit quantities take precedence.
+    if unit == TakeoffItem.Unit.SQUARE_FEET:
+        explicit = _decimal_or_none(geometry.get("area_sqft"))
+        if explicit is not None and explicit >= 0:
+            return explicit
+        dims = _calibrated_sheet_dimensions_feet(plan_sheet)
+        normalized_area = _geometry_normalized_area(geometry)
+        if dims and normalized_area is not None:
+            width_feet, height_feet = dims
+            return normalized_area * width_feet * height_feet
+        return Decimal("1")
+
+    if unit == TakeoffItem.Unit.LINEAR_FEET:
+        explicit = _decimal_or_none(geometry.get("length_lf"))
+        if explicit is None:
+            explicit = _decimal_or_none(geometry.get("length_linear_feet"))
+        if explicit is not None and explicit >= 0:
+            return explicit
+        dims = _calibrated_sheet_dimensions_feet(plan_sheet)
+        if dims:
+            length = _geometry_scaled_polyline_length_feet(geometry, dims[0], dims[1])
+            if length is not None:
+                return length
+            if geometry.get("type") == "rectangle":
+                width = _decimal_or_none(geometry.get("width"))
+                height = _decimal_or_none(geometry.get("height"))
+                if width is not None and height is not None and width >= 0 and height >= 0:
+                    return (width * dims[0]) + (height * dims[1])
+        return Decimal("1")
+
+    if unit == TakeoffItem.Unit.CUBIC_YARDS:
+        explicit = _decimal_or_none(geometry.get("volume_cubic_yards"))
+        if explicit is not None and explicit >= 0:
+            return explicit
+        return Decimal("1")
+
+    # Count/each/custom default to one item per accepted suggestion.
+    return Decimal("1")
 
 
 # ----- Suggestion accept / reject -----
@@ -155,17 +294,6 @@ def accept_suggestion(
             updated_by=user,
         )
 
-        qty = quantity
-        if qty is None:
-            qty = Decimal("1")
-        elif isinstance(qty, str):
-            try:
-                qty = Decimal(qty)
-            except InvalidOperation:
-                raise ValueError("Invalid quantity.")
-        if qty < 0:
-            raise ValueError("Quantity must be non-negative.")
-
         # Derive category/unit from suggestion label when not provided (estimator workflow)
         if category is None or unit is None:
             default_cat, default_unit = _default_category_unit_for_suggestion(
@@ -181,6 +309,22 @@ def accept_suggestion(
             raise ValueError("Invalid category.")
         if unit not in allowed_units:
             raise ValueError("Invalid unit.")
+
+        qty = quantity
+        if qty is None:
+            qty = _estimate_quantity_from_geometry(final_geometry, unit, plan_sheet)
+        elif isinstance(qty, str):
+            try:
+                qty = Decimal(qty)
+            except InvalidOperation:
+                raise ValueError("Invalid quantity.")
+        elif not isinstance(qty, Decimal):
+            try:
+                qty = Decimal(str(qty))
+            except (InvalidOperation, TypeError, ValueError):
+                raise ValueError("Invalid quantity.")
+        if qty < 0:
+            raise ValueError("Quantity must be non-negative.")
 
         takeoff = TakeoffItem.objects.create(
             project_id=plan_sheet.project_id,
@@ -237,21 +381,29 @@ def accept_suggestion(
         return annotation, takeoff
 
 
-def run_plan_analysis(plan_sheet: PlanSheet, user_prompt: str, user, provider_name: str = "mock") -> AIAnalysisRun:
+def run_plan_analysis(
+    plan_sheet: PlanSheet, user_prompt: str, user, provider_name: str | None = None
+) -> AIAnalysisRun:
     """Create AIAnalysisRun, run provider, create AISuggestion rows, record audit."""
+    selected_provider = provider_name or settings.PRECONSTRUCTION_ANALYSIS_PROVIDER or "mock"
     with transaction.atomic():
         run = AIAnalysisRun.objects.create(
             project=plan_sheet.project,
             plan_set=plan_sheet.plan_set,
             plan_sheet=plan_sheet,
-            provider_name=provider_name,
+            provider_name=selected_provider,
             user_prompt=user_prompt or "",
             status=AIAnalysisRun.Status.RUNNING,
-            request_payload_json={"user_prompt": user_prompt, "plan_sheet_id": str(plan_sheet.id)},
+            request_payload_json={
+                "user_prompt": user_prompt,
+                "plan_sheet_id": str(plan_sheet.id),
+                "provider_name": selected_provider,
+            },
+            started_at=timezone.now(),
             created_by=user,
         )
         try:
-            provider = get_provider(provider_name)
+            provider = get_provider(selected_provider)
             suggestions_data = provider.run_analysis(plan_sheet, user_prompt)
             response_payload = {"suggestions": suggestions_data}
             for s in suggestions_data:
@@ -400,6 +552,9 @@ def build_snapshot_payload(plan_set: PlanSet) -> dict[str, Any]:
             "id": str(sheet.id),
             "title": sheet.title,
             "sheet_number": sheet.sheet_number,
+            "calibrated_width": str(sheet.calibrated_width) if sheet.calibrated_width is not None else None,
+            "calibrated_height": str(sheet.calibrated_height) if sheet.calibrated_height is not None else None,
+            "calibrated_unit": sheet.calibrated_unit,
             "layers": layers_data,
             "takeoff_items": takeoff_data,
             "ai_suggestion_outcomes": suggestions_by_sheet.get(str(sheet.id), []),

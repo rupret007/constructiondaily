@@ -1,12 +1,14 @@
-"""Provider registry for plan analysis. Enables pluggable backends (mock, future OCR/CV/CAD)."""
+"""Provider registry for plan analysis. Enables pluggable backends (mock, OpenAI vision)."""
 
 from __future__ import annotations
 
 from .base import BaseAnalysisProvider
 from .mock import MockAnalysisProvider
+from .openai_vision import OpenAIVisionProvider
 
 _REGISTRY: dict[str, type[BaseAnalysisProvider]] = {
     "mock": MockAnalysisProvider,
+    "openai_vision": OpenAIVisionProvider,
 }
 
 

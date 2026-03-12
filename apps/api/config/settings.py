@@ -160,3 +160,13 @@ if not DEBUG and os.getenv("DJANGO_SECURE_SSL_REDIRECT", "").lower() == "true":
 REPORT_ATTACHMENT_MAX_BYTES = int(os.getenv("REPORT_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024)))
 REPORT_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "pdf"}
 REPORT_ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+
+# Preconstruction AI analysis provider settings
+PRECONSTRUCTION_ANALYSIS_PROVIDER = os.getenv("PRECONSTRUCTION_ANALYSIS_PROVIDER", "mock").strip() or "mock"
+PRECONSTRUCTION_ANALYSIS_TIMEOUT_SECONDS = int(os.getenv("PRECONSTRUCTION_ANALYSIS_TIMEOUT_SECONDS", "120") or "120")
+PRECONSTRUCTION_OPENAI_API_KEY = os.getenv("PRECONSTRUCTION_OPENAI_API_KEY", "").strip()
+PRECONSTRUCTION_OPENAI_BASE_URL = os.getenv("PRECONSTRUCTION_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+PRECONSTRUCTION_OPENAI_MODEL = os.getenv("PRECONSTRUCTION_OPENAI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini"
+PRECONSTRUCTION_OPENAI_MAX_SUGGESTIONS = int(
+    os.getenv("PRECONSTRUCTION_OPENAI_MAX_SUGGESTIONS", "25") or "25"
+)

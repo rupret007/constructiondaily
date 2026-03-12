@@ -463,8 +463,33 @@ class PreconstructionAPITests(TestCase):
         self.assertIsNotNone(provider)
         from preconstruction.providers.base import BaseAnalysisProvider
         self.assertTrue(isinstance(provider, BaseAnalysisProvider))
+        openai_provider = get_provider("openai_vision")
+        self.assertIsNotNone(openai_provider)
+        self.assertTrue(isinstance(openai_provider, BaseAnalysisProvider))
         with self.assertRaises(ValueError):
             get_provider("nonexistent")
+
+    def test_analysis_create_rejects_unknown_provider(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run_resp = self.client.post(
+            "/api/preconstruction/analysis/",
+            {"plan_sheet": str(plan_sheet.id), "user_prompt": "highlight doors", "provider_name": "bad_provider"},
+            format="json",
+        )
+        self.assertEqual(run_resp.status_code, 400)
+        self.assertIn("Unknown provider", run_resp.json().get("detail", ""))
 
     def test_accept_and_reject_suggestion(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -728,6 +753,98 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(suggestion.decision_state, AISuggestion.DecisionState.PENDING)
         self.assertEqual(TakeoffItem.objects.filter(plan_sheet=plan_sheet).count(), 0)
         self.assertEqual(AnnotationItem.objects.filter(plan_sheet=plan_sheet).count(), 0)
+
+    def test_accept_suggestion_auto_area_quantity_uses_sheet_calibration_feet(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            calibrated_width="100",
+            calibrated_height="80",
+            calibrated_unit=PlanSheet.CalibrationUnit.FEET,
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="concrete",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="polygon",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.5, "height": 0.25},
+            label="Concrete area",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 200)
+        takeoff = accept_resp.json()["takeoff"]
+        self.assertEqual(takeoff["unit"], "square_feet")
+        self.assertEqual(takeoff["quantity"], "1000.0000")
+
+    def test_accept_suggestion_auto_area_quantity_converts_meters_to_feet(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            calibrated_width="30",
+            calibrated_height="15",
+            calibrated_unit=PlanSheet.CalibrationUnit.METERS,
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="concrete",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="polygon",
+            geometry_json={"type": "rectangle", "x": 0.2, "y": 0.2, "width": 0.2, "height": 0.2},
+            label="Concrete area",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 200)
+        takeoff = accept_resp.json()["takeoff"]
+        self.assertEqual(takeoff["unit"], "square_feet")
+        self.assertEqual(takeoff["quantity"], "193.7504")
 
     def test_batch_accept_suggestions(self):
         """Batch accept accepts only pending suggestions with confidence >= min_confidence."""

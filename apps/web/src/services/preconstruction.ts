@@ -75,6 +75,16 @@ export async function fetchPlanSheet(sheetId: string): Promise<PlanSheet> {
   return apiRequest<PlanSheet>(`${P}/sheets/${sheetId}/`);
 }
 
+export async function updatePlanSheet(
+  sheetId: string,
+  payload: Partial<Pick<PlanSheet, "title" | "sheet_number" | "discipline" | "sheet_index" | "calibrated_width" | "calibrated_height" | "calibrated_unit">>
+): Promise<PlanSheet> {
+  return apiRequest<PlanSheet>(`${P}/sheets/${sheetId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function planSheetFileUrl(sheetId: string): string {
   const base = import.meta.env.VITE_API_BASE ?? "/api";
   return `${base}${P}/sheets/${sheetId}/file/`;
@@ -180,10 +190,18 @@ export async function updateTakeoffItem(
   });
 }
 
-export async function triggerAnalysis(planSheetId: string, userPrompt: string): Promise<AIAnalysisRun> {
+export async function triggerAnalysis(
+  planSheetId: string,
+  userPrompt: string,
+  providerName?: "mock" | "openai_vision"
+): Promise<AIAnalysisRun> {
   return apiRequest<AIAnalysisRun>(`${P}/analysis/`, {
     method: "POST",
-    body: JSON.stringify({ plan_sheet: planSheetId, user_prompt: userPrompt }),
+    body: JSON.stringify({
+      plan_sheet: planSheetId,
+      user_prompt: userPrompt,
+      ...(providerName ? { provider_name: providerName } : {}),
+    }),
   });
 }
 

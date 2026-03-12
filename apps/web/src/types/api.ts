@@ -74,6 +74,9 @@ export type PlanSheet = {
   sheet_index: number;
   width: number | null;
   height: number | null;
+  calibrated_width: number | null;
+  calibrated_height: number | null;
+  calibrated_unit: "feet" | "meters";
   parse_status: string;
   preview_image: string;
   created_by?: ApiUser;

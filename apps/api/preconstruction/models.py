@@ -56,6 +56,10 @@ class PlanSheet(TimeStampedModel):
         INDEXED = "indexed", "Indexed"
         FAILED = "failed", "Failed"
 
+    class CalibrationUnit(models.TextChoices):
+        FEET = "feet", "Feet"
+        METERS = "meters", "Meters"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="plan_sheets")
     plan_set = models.ForeignKey(PlanSet, on_delete=models.CASCADE, related_name="sheets")
@@ -67,6 +71,13 @@ class PlanSheet(TimeStampedModel):
     sheet_index = models.PositiveIntegerField(default=0)
     width = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     height = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    calibrated_width = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    calibrated_height = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    calibrated_unit = models.CharField(
+        max_length=16,
+        choices=CalibrationUnit.choices,
+        default=CalibrationUnit.FEET,
+    )
     parse_status = models.CharField(
         max_length=32, choices=ParseStatus.choices, default=ParseStatus.UPLOADED
     )
