@@ -37,6 +37,7 @@ export type DailyReport = {
 export type SessionResponse = {
   authenticated: boolean;
   user?: ApiUser;
+  csrfToken?: string;
 };
 
 export type OfflineMutation = {

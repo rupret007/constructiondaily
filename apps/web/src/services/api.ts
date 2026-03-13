@@ -1,4 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
+let cachedCsrfToken = "";
 
 export class ApiRequestError extends Error {
   status: number;
@@ -15,6 +16,14 @@ export class ApiRequestError extends Error {
 function getCookie(name: string): string {
   const cookie = document.cookie.split("; ").find((item) => item.startsWith(`${name}=`));
   return cookie ? decodeURIComponent(cookie.split("=")[1]) : "";
+}
+
+function captureCsrfToken(payload: unknown): void {
+  if (!payload || typeof payload !== "object") return;
+  const token = (payload as Record<string, unknown>).csrfToken;
+  if (typeof token === "string" && token.trim()) {
+    cachedCsrfToken = token.trim();
+  }
 }
 
 function firstErrorString(value: unknown): string {
@@ -55,7 +64,7 @@ export async function apiRequest<T>(endpoint: string, init: RequestInit = {}): P
 
   const method = init.method ?? "GET";
   if (!["GET", "HEAD", "OPTIONS", "TRACE"].includes(method.toUpperCase())) {
-    const csrfToken = getCookie("csrftoken");
+    const csrfToken = getCookie("csrftoken") || cachedCsrfToken;
     if (csrfToken) {
       headers.set("X-CSRFToken", csrfToken);
     }
@@ -81,5 +90,7 @@ export async function apiRequest<T>(endpoint: string, init: RequestInit = {}): P
   if (response.status === 204) {
     return undefined as T;
   }
-  return (await response.json()) as T;
+  const payload = (await response.json()) as T;
+  captureCsrfToken(payload);
+  return payload;
 }

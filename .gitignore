@@ -28,6 +28,8 @@ coverage/
 npm-debug.log*
 pnpm-lock.yaml
 *.tsbuildinfo
+playwright-report/
+test-results/
 
 # Build caches
 .parcel-cache/

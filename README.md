@@ -68,3 +68,10 @@ From the repo root, run **`build.bat`** to build the frontend, collect static fi
 - Backend tests: `python manage.py test` (from `apps/api`)
 - Frontend tests: `npm run test` (from `apps/web`)
 - Frontend build validation: `npm run build` (from `apps/web`)
+- Browser smoke/regression tests: `npx playwright install chromium` then `npm run test:e2e` (from `apps/web`)
+
+## Regression Guardrails
+
+- Repository CI now lives in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and runs backend tests, frontend tests/build, and browser smoke tests on pushes and pull requests.
+- Deterministic browser smoke-test data can be seeded from `apps/api` with `python manage.py seed_e2e_data`.
+- The first browser regression covers sign-in, navigation into **Preconstruction**, and plan-set creation using Playwright.
