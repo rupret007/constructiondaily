@@ -164,6 +164,36 @@ export type TakeoffItem = {
   updated_at: string;
 };
 
+export type TakeoffSummary = {
+  total_items: number;
+  pending_items: number;
+  accepted_items: number;
+  rejected_items: number;
+  edited_items: number;
+  manual_items: number;
+  ai_assisted_items: number;
+  linked_annotation_items: number;
+  unit_totals: Array<{
+    unit: string;
+    item_count: number;
+    quantity_total: string;
+  }>;
+  category_totals: Array<{
+    category: string;
+    unit: string;
+    item_count: number;
+    quantity_total: string;
+  }>;
+  review_state_totals: Array<{
+    review_state: string;
+    item_count: number;
+  }>;
+  source_totals: Array<{
+    source: string;
+    item_count: number;
+  }>;
+};
+
 export type AIAnalysisRun = {
   id: string;
   project: string;

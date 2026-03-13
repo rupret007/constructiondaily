@@ -12,6 +12,8 @@ from typing import Any
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Count, DecimalField, Q, Sum, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from audit.services import record_audit_event
@@ -83,6 +85,19 @@ def _normalize_assembly_profile(value: Any) -> str:
     if normalized not in SUPPORTED_ASSEMBLY_PROFILES:
         raise ValueError("Invalid assembly_profile.")
     return normalized
+
+
+def _decimal_to_string(value: Decimal | None) -> str:
+    if value is None:
+        return "0.0000"
+    if not isinstance(value, Decimal):
+        try:
+            value = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return "0.0000"
+    if not value.is_finite():
+        return "0.0000"
+    return format(value.quantize(Decimal("0.0001")), "f")
 
 
 def _default_category_unit_for_suggestion(label: str | None, suggestion_type: str | None) -> tuple[str, str]:
@@ -615,6 +630,62 @@ def create_takeoff_from_annotation(
             },
         )
         return primary, created[1:], resolved_profile
+
+
+def build_takeoff_summary(queryset) -> dict[str, Any]:
+    """Aggregate takeoff rows into estimator-friendly review rollups."""
+    zero_decimal = Value(Decimal("0"), output_field=DecimalField(max_digits=14, decimal_places=4))
+    review_counts = {
+        row["review_state"]: row["item_count"]
+        for row in queryset.values("review_state").annotate(item_count=Count("id")).order_by("review_state")
+    }
+    source_counts = {
+        row["source"]: row["item_count"]
+        for row in queryset.values("source").annotate(item_count=Count("id")).order_by("source")
+    }
+
+    return {
+        "total_items": queryset.count(),
+        "pending_items": review_counts.get(TakeoffItem.ReviewState.PENDING, 0),
+        "accepted_items": review_counts.get(TakeoffItem.ReviewState.ACCEPTED, 0),
+        "rejected_items": review_counts.get(TakeoffItem.ReviewState.REJECTED, 0),
+        "edited_items": review_counts.get(TakeoffItem.ReviewState.EDITED, 0),
+        "manual_items": source_counts.get(TakeoffItem.Source.MANUAL, 0),
+        "ai_assisted_items": source_counts.get(TakeoffItem.Source.AI_ASSISTED, 0),
+        "linked_annotation_items": queryset.aggregate(
+            count=Count("id", filter=Q(linked_annotation__isnull=False))
+        )["count"]
+        or 0,
+        "unit_totals": [
+            {
+                "unit": row["unit"],
+                "item_count": row["item_count"],
+                "quantity_total": _decimal_to_string(row["quantity_total"]),
+            }
+            for row in queryset.values("unit")
+            .annotate(item_count=Count("id"), quantity_total=Coalesce(Sum("quantity"), zero_decimal))
+            .order_by("unit")
+        ],
+        "category_totals": [
+            {
+                "category": row["category"],
+                "unit": row["unit"],
+                "item_count": row["item_count"],
+                "quantity_total": _decimal_to_string(row["quantity_total"]),
+            }
+            for row in queryset.values("category", "unit")
+            .annotate(item_count=Count("id"), quantity_total=Coalesce(Sum("quantity"), zero_decimal))
+            .order_by("category", "unit")
+        ],
+        "review_state_totals": [
+            {"review_state": row["review_state"], "item_count": row["item_count"]}
+            for row in queryset.values("review_state").annotate(item_count=Count("id")).order_by("review_state")
+        ],
+        "source_totals": [
+            {"source": row["source"], "item_count": row["item_count"]}
+            for row in queryset.values("source").annotate(item_count=Count("id")).order_by("source")
+        ],
+    }
 
 
 def run_plan_analysis(

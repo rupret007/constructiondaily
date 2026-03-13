@@ -10,6 +10,7 @@ import type {
   PlanSheet,
   RevisionSnapshot,
   TakeoffItem,
+  TakeoffSummary,
 } from "../types/api";
 
 const P = "/preconstruction";
@@ -173,11 +174,41 @@ export async function createTakeoffFromAnnotation(
   );
 }
 
-export async function fetchTakeoffItems(planSetId: string, planSheetId?: string): Promise<TakeoffItem[]> {
-  let url = `${P}/takeoff/?plan_set=${planSetId}`;
-  if (planSheetId) url += `&plan_sheet=${planSheetId}`;
+type TakeoffQueryFilters = {
+  category?: string;
+  source?: string;
+  review_state?: string;
+  bid_package?: string;
+  cost_code?: string;
+};
+
+function buildTakeoffQuery(planSetId: string, planSheetId?: string, filters?: TakeoffQueryFilters): string {
+  const params = new URLSearchParams({ plan_set: planSetId });
+  if (planSheetId) params.set("plan_sheet", planSheetId);
+  if (filters?.category) params.set("category", filters.category);
+  if (filters?.source) params.set("source", filters.source);
+  if (filters?.review_state) params.set("review_state", filters.review_state);
+  if (filters?.bid_package) params.set("bid_package", filters.bid_package);
+  if (filters?.cost_code) params.set("cost_code", filters.cost_code);
+  return params.toString();
+}
+
+export async function fetchTakeoffItems(
+  planSetId: string,
+  planSheetId?: string,
+  filters?: TakeoffQueryFilters
+): Promise<TakeoffItem[]> {
+  const url = `${P}/takeoff/?${buildTakeoffQuery(planSetId, planSheetId, filters)}`;
   const response = await apiRequest<TakeoffItem[]>(url);
   return Array.isArray(response) ? response : [];
+}
+
+export async function fetchTakeoffSummary(
+  planSetId: string,
+  planSheetId?: string,
+  filters?: TakeoffQueryFilters
+): Promise<TakeoffSummary> {
+  return apiRequest<TakeoffSummary>(`${P}/takeoff/summary/?${buildTakeoffQuery(planSetId, planSheetId, filters)}`);
 }
 
 export async function createTakeoffItem(payload: {
@@ -200,12 +231,16 @@ export async function createTakeoffItem(payload: {
 
 export async function updateTakeoffItem(
   takeoffId: string,
-  payload: Partial<Pick<TakeoffItem, "category" | "subcategory" | "unit" | "quantity" | "notes" | "cost_code" | "bid_package">>
+  payload: Partial<Pick<TakeoffItem, "category" | "subcategory" | "unit" | "quantity" | "notes" | "cost_code" | "bid_package" | "review_state">>
 ): Promise<TakeoffItem> {
   return apiRequest<TakeoffItem>(`${P}/takeoff/${takeoffId}/`, {
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+}
+
+export async function deleteTakeoffItem(takeoffId: string): Promise<void> {
+  return apiRequest<void>(`${P}/takeoff/${takeoffId}/`, { method: "DELETE" });
 }
 
 export async function triggerAnalysis(

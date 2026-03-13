@@ -678,6 +678,156 @@ class PreconstructionAPITests(TestCase):
             1,
         )
 
+    def test_takeoff_update_supports_estimator_review_fields(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        takeoff = TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="2",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        patch_resp = self.client.patch(
+            f"/api/preconstruction/takeoff/{takeoff.id}/",
+            {
+                "subcategory": "Hollow metal",
+                "cost_code": "08710",
+                "bid_package": "Doors and frames",
+                "review_state": "accepted",
+                "notes": "Estimator-reviewed package",
+            },
+            format="json",
+        )
+        self.assertEqual(patch_resp.status_code, 200)
+        data = patch_resp.json()
+        self.assertEqual(data["subcategory"], "Hollow metal")
+        self.assertEqual(data["cost_code"], "08710")
+        self.assertEqual(data["bid_package"], "Doors and frames")
+        self.assertEqual(data["review_state"], "accepted")
+        self.assertEqual(data["notes"], "Estimator-reviewed package")
+        self.assertGreaterEqual(
+            AuditEvent.objects.filter(event_type="update_takeoff_item", object_id=str(takeoff.id)).count(),
+            1,
+        )
+
+    def test_takeoff_summary_returns_rollups_and_honors_filters(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        layer = AnnotationLayer.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            name="Default",
+            created_by=self.user,
+        )
+        doors_takeoff = TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="2",
+            source=TakeoffItem.Source.MANUAL,
+            review_state=TakeoffItem.ReviewState.PENDING,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=plan_sheet,
+            layer=layer,
+            annotation_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.2, "width": 0.1, "height": 0.1},
+            label="Door D1",
+            source=AnnotationItem.Source.MANUAL,
+            linked_takeoff_item=doors_takeoff,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=TakeoffItem.Category.DOOR_HARDWARE,
+            unit=TakeoffItem.Unit.EACH,
+            quantity="2",
+            source=TakeoffItem.Source.AI_ASSISTED,
+            review_state=TakeoffItem.ReviewState.ACCEPTED,
+            bid_package="Doors and frames",
+            cost_code="08710",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=TakeoffItem.Category.LINEAR_MEASUREMENTS,
+            unit=TakeoffItem.Unit.LINEAR_FEET,
+            quantity="12.5",
+            source=TakeoffItem.Source.MANUAL,
+            review_state=TakeoffItem.ReviewState.REJECTED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        summary_resp = self.client.get(
+            "/api/preconstruction/takeoff/summary/",
+            {"plan_set": str(plan_set.id), "plan_sheet": str(plan_sheet.id)},
+        )
+        self.assertEqual(summary_resp.status_code, 200)
+        data = summary_resp.json()
+        self.assertEqual(data["total_items"], 3)
+        self.assertEqual(data["pending_items"], 1)
+        self.assertEqual(data["accepted_items"], 1)
+        self.assertEqual(data["rejected_items"], 1)
+        self.assertEqual(data["manual_items"], 2)
+        self.assertEqual(data["ai_assisted_items"], 1)
+        self.assertEqual(data["linked_annotation_items"], 1)
+        self.assertTrue(
+            any(
+                row["category"] == "doors" and row["unit"] == "count" and row["quantity_total"] == "2.0000"
+                for row in data["category_totals"]
+            )
+        )
+        self.assertTrue(
+            any(
+                row["unit"] == "linear_feet" and row["quantity_total"] == "12.5000"
+                for row in data["unit_totals"]
+            )
+        )
+
+        filtered_resp = self.client.get(
+            "/api/preconstruction/takeoff/summary/",
+            {
+                "plan_set": str(plan_set.id),
+                "plan_sheet": str(plan_sheet.id),
+                "review_state": "pending",
+            },
+        )
+        self.assertEqual(filtered_resp.status_code, 200)
+        self.assertEqual(filtered_resp.json()["total_items"], 1)
+        self.assertEqual(filtered_resp.json()["pending_items"], 1)
+
     def test_takeoff_create_rejects_cross_project_references(self):
         self.client.login(username="estimator1", password="test-pass")
         other_project = Project.objects.create(code="BID-3", name="Building C", location="Site Z")

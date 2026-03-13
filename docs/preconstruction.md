@@ -18,11 +18,12 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 5. Create point/rectangle/polygon/polyline annotations directly on the canvas.
 6. (Optional) Set sheet calibration (full-sheet width/height + unit) to enable auto area/length quantity estimates.
 7. Create takeoff items manually or from selected annotations (single-line or assembly package mode).
-8. Run AI analysis, then accept/reject/edit suggestions.
-9. Choose analysis provider per run (`mock`, `openai_vision` for PDF, or `cad_dxf` for DXF/DWG).
-10. Batch-accept high-confidence suggestions (default threshold 85%).
-11. Create snapshots and lock when final.
-12. Export JSON or CSV.
+8. Review takeoff rollups, filter the workspace, and edit quantity/cost code/bid package/review state as needed.
+9. Run AI analysis, then accept/reject/edit suggestions.
+10. Choose analysis provider per run (`mock`, `openai_vision` for PDF, or `cad_dxf` for DXF/DWG).
+11. Batch-accept high-confidence suggestions (default threshold 85%).
+12. Create snapshots and lock when final.
+13. Export JSON or CSV.
 
 ## Current capabilities
 
@@ -30,6 +31,11 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 - CAD canvas preview for DXF/DWG sheets via normalized CAD entity geometry.
 - Layer visibility toggles.
 - Annotation inspector with delete and "create takeoff package" actions.
+- Takeoff review workspace with:
+  - rollup cards for visible item count, pending review, AI-assisted rows, and linked annotations
+  - unit/category summary totals for the current filter set
+  - filters by review state, source, and category
+  - editable quantity, category, subcategory, review state, cost code, bid package, and notes
 - Annotation-to-takeoff package creation profiles:
   - `auto` (detects door/window/fixture patterns)
   - `none` (single-line takeoff only)
@@ -103,6 +109,7 @@ Base path: `/api/preconstruction/`
 - `annotations/`: annotation CRUD
 - `annotations/{id}/create_takeoff/`: create takeoff package from one annotation (`assembly_profile` supported)
 - `takeoff/`: takeoff CRUD
+- `takeoff/summary/`: filtered takeoff rollups for estimator review workspace
 - `analysis/`: trigger/list AI analysis runs
 - `suggestions/`: list suggestions + accept/reject + batch_accept
 - `snapshots/`: create/list snapshots + lock

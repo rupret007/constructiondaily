@@ -43,6 +43,7 @@ from .serializers import (
 from .services import (
     accept_suggestion,
     batch_accept_suggestions,
+    build_takeoff_summary,
     build_snapshot_payload,
     create_takeoff_from_annotation,
     create_export,
@@ -377,11 +378,30 @@ class TakeoffItemViewSet(viewsets.ModelViewSet):
         "project", "plan_set", "plan_sheet", "created_by", "updated_by"
     )
     permission_classes = [IsAuthenticated]
-    filterset_fields = ("project", "plan_set", "plan_sheet", "category", "source")
+    filterset_fields = (
+        "project",
+        "plan_set",
+        "plan_sheet",
+        "category",
+        "source",
+        "review_state",
+        "cost_code",
+        "bid_package",
+    )
     ordering_fields = ("category", "created_at")
 
     def get_queryset(self):
         return self.queryset.filter(project_id__in=_project_ids_for_user(self.request.user))
+
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request):
+        if not request.query_params.get("plan_set"):
+            return Response(
+                {"detail": "plan_set is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        queryset = self.filter_queryset(self.get_queryset())
+        return Response(build_takeoff_summary(queryset), status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
         project = serializer.validated_data["project"]

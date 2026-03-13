@@ -18,6 +18,7 @@ import {
   createTakeoffFromAnnotation,
   createTakeoffItem,
   deleteAnnotation,
+  deleteTakeoffItem,
   fetchAnnotationLayers,
   fetchAnnotations,
   fetchExportRecords,
@@ -26,6 +27,7 @@ import {
   fetchSnapshots,
   fetchSuggestions,
   fetchTakeoffItems,
+  fetchTakeoffSummary,
   lockSnapshot,
   planSheetFileUrl,
   rejectSuggestion,
@@ -33,6 +35,7 @@ import {
   updateAnnotation,
   updateAnnotationLayer,
   updatePlanSheet,
+  updateTakeoffItem,
 } from "../services/preconstruction";
 import type {
   AISuggestion,
@@ -43,6 +46,7 @@ import type {
   PlanSheet,
   RevisionSnapshot,
   TakeoffItem,
+  TakeoffSummary,
 } from "../types/api";
 
 // PDF.js worker: CDN URL matching pdfjs-dist version in package.json
@@ -186,6 +190,32 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
+const TAKEOFF_CATEGORY_OPTIONS = [
+  "doors",
+  "door_hardware",
+  "windows",
+  "openings",
+  "rooms",
+  "plumbing_fixtures",
+  "electrical_fixtures",
+  "concrete_areas",
+  "linear_measurements",
+  "custom",
+] as const;
+
+const TAKEOFF_UNIT_OPTIONS = ["count", "square_feet", "linear_feet", "cubic_yards", "each", "custom"] as const;
+
+const TAKEOFF_REVIEW_STATE_OPTIONS = ["pending", "accepted", "edited", "rejected"] as const;
+
+function formatTokenLabel(value: string): string {
+  if (value === "ai_assisted") return "AI assisted";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -193,6 +223,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [layers, setLayers] = useState<LayerType[]>([]);
   const [annotations, setAnnotations] = useState<AnnotationItem[]>([]);
   const [takeoffItems, setTakeoffItems] = useState<TakeoffItem[]>([]);
+  const [takeoffSummary, setTakeoffSummary] = useState<TakeoffSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [scale, setScale] = useState(1.2);
@@ -222,6 +253,18 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [exports, setExports] = useState<ExportRecord[]>([]);
   const [exportPayload, setExportPayload] = useState<string | null>(null);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [selectedTakeoffId, setSelectedTakeoffId] = useState<string | null>(null);
+  const [takeoffCategoryFilter, setTakeoffCategoryFilter] = useState("all");
+  const [takeoffSourceFilter, setTakeoffSourceFilter] = useState("all");
+  const [takeoffReviewFilter, setTakeoffReviewFilter] = useState("all");
+  const [editTakeoffCategory, setEditTakeoffCategory] = useState("doors");
+  const [editTakeoffSubcategory, setEditTakeoffSubcategory] = useState("");
+  const [editTakeoffUnit, setEditTakeoffUnit] = useState("count");
+  const [editTakeoffQuantity, setEditTakeoffQuantity] = useState("1");
+  const [editTakeoffCostCode, setEditTakeoffCostCode] = useState("");
+  const [editTakeoffBidPackage, setEditTakeoffBidPackage] = useState("");
+  const [editTakeoffReviewState, setEditTakeoffReviewState] = useState("pending");
+  const [editTakeoffNotes, setEditTakeoffNotes] = useState("");
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const [editCategory, setEditCategory] = useState("doors");
@@ -277,8 +320,6 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       }
       const annList = await fetchAnnotations(sheetId);
       setAnnotations(annList);
-      const takeoffList = await fetchTakeoffItems(planSetId, sheetId);
-      setTakeoffItems(takeoffList);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load sheet.");
     } finally {
@@ -286,9 +327,61 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     }
   }, [sheetId, planSetId]);
 
+  const loadTakeoffWorkspace = useCallback(async () => {
+    const filters = {
+      ...(takeoffCategoryFilter !== "all" ? { category: takeoffCategoryFilter } : {}),
+      ...(takeoffSourceFilter !== "all" ? { source: takeoffSourceFilter } : {}),
+      ...(takeoffReviewFilter !== "all" ? { review_state: takeoffReviewFilter } : {}),
+    };
+    try {
+      const [list, summary] = await Promise.all([
+        fetchTakeoffItems(planSetId, sheetId, filters),
+        fetchTakeoffSummary(planSetId, sheetId, filters),
+      ]);
+      setTakeoffItems(list);
+      setTakeoffSummary(summary);
+      setSelectedTakeoffId((current) => {
+        if (current && list.some((item) => item.id === current)) return current;
+        return list[0]?.id ?? null;
+      });
+    } catch (e) {
+      setTakeoffItems([]);
+      setTakeoffSummary(null);
+      setSelectedTakeoffId(null);
+      setError(e instanceof Error ? e.message : "Failed to load takeoff workspace.");
+    }
+  }, [planSetId, sheetId, takeoffCategoryFilter, takeoffSourceFilter, takeoffReviewFilter]);
+
   useEffect(() => {
     void loadSheetAndData();
   }, [loadSheetAndData]);
+
+  useEffect(() => {
+    void loadTakeoffWorkspace();
+  }, [loadTakeoffWorkspace]);
+
+  useEffect(() => {
+    const selected = takeoffItems.find((item) => item.id === selectedTakeoffId) ?? null;
+    if (!selected) {
+      setEditTakeoffCategory("doors");
+      setEditTakeoffSubcategory("");
+      setEditTakeoffUnit("count");
+      setEditTakeoffQuantity("1");
+      setEditTakeoffCostCode("");
+      setEditTakeoffBidPackage("");
+      setEditTakeoffReviewState("pending");
+      setEditTakeoffNotes("");
+      return;
+    }
+    setEditTakeoffCategory(selected.category || "custom");
+    setEditTakeoffSubcategory(selected.subcategory || "");
+    setEditTakeoffUnit(selected.unit || "count");
+    setEditTakeoffQuantity(selected.quantity || "1");
+    setEditTakeoffCostCode(selected.cost_code || "");
+    setEditTakeoffBidPackage(selected.bid_package || "");
+    setEditTakeoffReviewState(selected.review_state || "pending");
+    setEditTakeoffNotes(selected.notes || "");
+  }, [selectedTakeoffId, takeoffItems]);
 
   const addAnnotationWithGeometry = async (
     geometry_json: Record<string, unknown>,
@@ -630,9 +723,9 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     setCreating(true);
     setError("");
     try {
-      await createTakeoffFromAnnotation(annotation.id, annotationAssemblyProfile);
-      const list = await fetchTakeoffItems(planSetId, sheetId);
-      setTakeoffItems(list);
+      const created = await createTakeoffFromAnnotation(annotation.id, annotationAssemblyProfile);
+      await loadTakeoffWorkspace();
+      setSelectedTakeoffId(created.primary_takeoff.id);
       const annList = await fetchAnnotations(sheetId);
       setAnnotations(annList);
     } catch (e) {
@@ -645,8 +738,9 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const handleAddTakeoff = async () => {
     if (!sheet) return;
     setCreating(true);
+    setError("");
     try {
-      await createTakeoffItem({
+      const created = await createTakeoffItem({
         project: sheet.project,
         plan_set: planSetId,
         plan_sheet: sheetId,
@@ -655,10 +749,48 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         quantity: addTakeoffQuantity,
       });
       setAddTakeoffQuantity("1");
-      const list = await fetchTakeoffItems(planSetId, sheetId);
-      setTakeoffItems(list);
+      await loadTakeoffWorkspace();
+      setSelectedTakeoffId(created.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add takeoff.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleSaveTakeoff = async () => {
+    if (!selectedTakeoffId) return;
+    setCreating(true);
+    setError("");
+    try {
+      await updateTakeoffItem(selectedTakeoffId, {
+        category: editTakeoffCategory,
+        subcategory: editTakeoffSubcategory,
+        unit: editTakeoffUnit,
+        quantity: editTakeoffQuantity,
+        cost_code: editTakeoffCostCode,
+        bid_package: editTakeoffBidPackage,
+        review_state: editTakeoffReviewState,
+        notes: editTakeoffNotes,
+      });
+      await loadTakeoffWorkspace();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save takeoff.");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDeleteTakeoff = async () => {
+    if (!selectedTakeoffId) return;
+    if (!window.confirm("Delete this takeoff item?")) return;
+    setCreating(true);
+    setError("");
+    try {
+      await deleteTakeoffItem(selectedTakeoffId);
+      await loadTakeoffWorkspace();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete takeoff.");
     } finally {
       setCreating(false);
     }
@@ -1054,6 +1186,8 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     drawInteractiveOverlays(ctx, width, height);
   }, [sheet, scale, drawCadReference, drawInteractiveOverlays]);
 
+  const selectedTakeoff = takeoffItems.find((item) => item.id === selectedTakeoffId) ?? null;
+
   if (loading && !sheet) {
     return (
       <section className="card">
@@ -1156,28 +1290,205 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           )}
         </div>
         <div className="card" style={{ flex: "1" }}>
-          <h4>Takeoff summary</h4>
-          {takeoffItems.length === 0 ? (
-            <p className="empty-hint">No takeoff items on this sheet yet.</p>
-          ) : (
-            <ul style={{ listStyle: "none", padding: 0 }}>
-              {takeoffItems.map((t) => (
-                <li key={t.id}>
-                  {t.category}: {t.quantity} {t.unit}
-                </li>
-              ))}
-            </ul>
+          <h4>Takeoff workspace</h4>
+          {takeoffSummary && (
+            <>
+              <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+                <div className="card" style={{ flex: "1 1 120px", margin: 0 }}>
+                  <strong>{takeoffSummary.total_items}</strong>
+                  <div className="empty-hint">Visible items</div>
+                </div>
+                <div className="card" style={{ flex: "1 1 120px", margin: 0 }}>
+                  <strong>{takeoffSummary.pending_items}</strong>
+                  <div className="empty-hint">Pending review</div>
+                </div>
+                <div className="card" style={{ flex: "1 1 120px", margin: 0 }}>
+                  <strong>{takeoffSummary.ai_assisted_items}</strong>
+                  <div className="empty-hint">AI-assisted</div>
+                </div>
+                <div className="card" style={{ flex: "1 1 120px", margin: 0 }}>
+                  <strong>{takeoffSummary.linked_annotation_items}</strong>
+                  <div className="empty-hint">Linked to annotation</div>
+                </div>
+              </div>
+              <p className="empty-hint" style={{ marginTop: 0 }}>
+                Unit totals:{" "}
+                {takeoffSummary.unit_totals.length > 0
+                  ? takeoffSummary.unit_totals.map((row) => `${row.quantity_total} ${formatTokenLabel(row.unit)} (${row.item_count})`).join(" | ")
+                  : "No quantified items yet."}
+              </p>
+              {takeoffSummary.category_totals.length > 0 && (
+                <p className="empty-hint" style={{ marginTop: 0 }}>
+                  Category rollup:{" "}
+                  {takeoffSummary.category_totals
+                    .slice(0, 6)
+                    .map((row) => `${formatTokenLabel(row.category)} ${row.quantity_total} ${formatTokenLabel(row.unit)}`)
+                    .join(" | ")}
+                  {takeoffSummary.category_totals.length > 6 ? " | ..." : ""}
+                </p>
+              )}
+            </>
           )}
-          <div className="row" style={{ marginTop: "0.5rem" }}>
+          <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+            <select
+              value={takeoffReviewFilter}
+              onChange={(e) => setTakeoffReviewFilter(e.target.value)}
+              aria-label="Takeoff review filter"
+            >
+              <option value="all">All review states</option>
+              {TAKEOFF_REVIEW_STATE_OPTIONS.map((state) => (
+                <option key={state} value={state}>
+                  {formatTokenLabel(state)}
+                </option>
+              ))}
+            </select>
+            <select
+              value={takeoffSourceFilter}
+              onChange={(e) => setTakeoffSourceFilter(e.target.value)}
+              aria-label="Takeoff source filter"
+            >
+              <option value="all">All sources</option>
+              <option value="manual">Manual</option>
+              <option value="ai_assisted">AI assisted</option>
+            </select>
+            <select
+              value={takeoffCategoryFilter}
+              onChange={(e) => setTakeoffCategoryFilter(e.target.value)}
+              aria-label="Takeoff category filter"
+            >
+              <option value="all">All categories</option>
+              {TAKEOFF_CATEGORY_OPTIONS.map((category) => (
+                <option key={category} value={category}>
+                  {formatTokenLabel(category)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="row sheet-viewer-sidebars" style={{ alignItems: "flex-start", gap: "0.75rem" }}>
+            <div style={{ flex: "0 0 280px" }}>
+              {takeoffItems.length === 0 ? (
+                <p className="empty-hint">No takeoff items match the current filters on this sheet yet.</p>
+              ) : (
+                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                  {takeoffItems.map((t) => (
+                    <li key={t.id} style={{ marginBottom: "0.5rem" }}>
+                      <button
+                        type="button"
+                        className={`report-row ${selectedTakeoffId === t.id ? "selected" : ""}`}
+                        style={{ width: "100%", textAlign: "left" }}
+                        onClick={() => setSelectedTakeoffId(t.id)}
+                      >
+                        <strong>{formatTokenLabel(t.category)}</strong>
+                        <div style={{ fontSize: "0.9rem" }}>{t.quantity} {formatTokenLabel(t.unit)}</div>
+                        <div className="empty-hint">
+                          {formatTokenLabel(t.review_state)} | {formatTokenLabel(t.source)}
+                          {t.cost_code ? ` | CC ${t.cost_code}` : ""}
+                          {t.bid_package ? ` | ${t.bid_package}` : ""}
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div style={{ flex: "1" }}>
+              <h5 style={{ marginTop: 0, marginBottom: "0.5rem" }}>Selected takeoff</h5>
+              {selectedTakeoff ? (
+                <>
+                  <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+                    <select value={editTakeoffCategory} onChange={(e) => setEditTakeoffCategory(e.target.value)} aria-label="Takeoff category">
+                      {TAKEOFF_CATEGORY_OPTIONS.map((category) => (
+                        <option key={category} value={category}>
+                          {formatTokenLabel(category)}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={editTakeoffSubcategory}
+                      onChange={(e) => setEditTakeoffSubcategory(e.target.value)}
+                      placeholder="Subcategory"
+                      aria-label="Takeoff subcategory"
+                      style={{ minWidth: "10rem" }}
+                    />
+                    <input
+                      type="text"
+                      value={editTakeoffQuantity}
+                      onChange={(e) => setEditTakeoffQuantity(e.target.value)}
+                      placeholder="Qty"
+                      aria-label="Takeoff quantity"
+                      style={{ width: "5rem" }}
+                    />
+                    <select value={editTakeoffUnit} onChange={(e) => setEditTakeoffUnit(e.target.value)} aria-label="Takeoff unit">
+                      {TAKEOFF_UNIT_OPTIONS.map((unit) => (
+                        <option key={unit} value={unit}>
+                          {formatTokenLabel(unit)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+                    <input
+                      type="text"
+                      value={editTakeoffCostCode}
+                      onChange={(e) => setEditTakeoffCostCode(e.target.value)}
+                      placeholder="Cost code"
+                      aria-label="Takeoff cost code"
+                      style={{ minWidth: "8rem" }}
+                    />
+                    <input
+                      type="text"
+                      value={editTakeoffBidPackage}
+                      onChange={(e) => setEditTakeoffBidPackage(e.target.value)}
+                      placeholder="Bid package"
+                      aria-label="Takeoff bid package"
+                      style={{ minWidth: "10rem" }}
+                    />
+                    <select value={editTakeoffReviewState} onChange={(e) => setEditTakeoffReviewState(e.target.value)} aria-label="Takeoff review state">
+                      {TAKEOFF_REVIEW_STATE_OPTIONS.map((state) => (
+                        <option key={state} value={state}>
+                          {formatTokenLabel(state)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <textarea
+                    value={editTakeoffNotes}
+                    onChange={(e) => setEditTakeoffNotes(e.target.value)}
+                    placeholder="Estimator notes"
+                    aria-label="Takeoff notes"
+                    style={{ width: "100%", minHeight: "5rem", marginTop: "0.5rem" }}
+                  />
+                  <p className="empty-hint" style={{ marginTop: "0.5rem" }}>
+                    Source: {formatTokenLabel(selectedTakeoff.source)} | Current review state: {formatTokenLabel(selectedTakeoff.review_state)}
+                  </p>
+                  <div className="row">
+                    <button type="button" onClick={() => void handleSaveTakeoff()} disabled={creating}>
+                      Save takeoff
+                    </button>
+                    <button type="button" onClick={() => void handleDeleteTakeoff()} disabled={creating}>
+                      Delete
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="empty-hint">Select a takeoff item to edit quantity, review state, cost code, or bid package.</p>
+              )}
+            </div>
+          </div>
+          <div className="row" style={{ marginTop: "0.75rem", gap: "0.5rem", flexWrap: "wrap" }}>
             <select
               value={addTakeoffCategory}
               onChange={(e) => setAddTakeoffCategory(e.target.value)}
               aria-label="Category"
             >
               <option value="doors">Doors</option>
+              <option value="door_hardware">Door hardware</option>
               <option value="windows">Windows</option>
               <option value="plumbing_fixtures">Plumbing</option>
+              <option value="electrical_fixtures">Electrical</option>
               <option value="concrete_areas">Concrete</option>
+              <option value="linear_measurements">Linear</option>
               <option value="custom">Custom</option>
             </select>
             <input
@@ -1196,7 +1507,9 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
               <option value="count">Count</option>
               <option value="square_feet">SF</option>
               <option value="linear_feet">LF</option>
+              <option value="cubic_yards">CY</option>
               <option value="each">Each</option>
+              <option value="custom">Custom</option>
             </select>
             <button type="button" onClick={() => void handleAddTakeoff()} disabled={creating}>
               Add takeoff
