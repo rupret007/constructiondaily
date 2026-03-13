@@ -2035,6 +2035,161 @@ class PreconstructionAPITests(TestCase):
         record = ExportRecord.objects.get(plan_set=plan_set, export_type="pdf_metadata")
         self.assertEqual(record.status, ExportRecord.Status.GENERATED)
 
+    def test_preconstruction_copilot_returns_grounded_takeoff_answer(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Bid Set A",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="First Floor",
+            sheet_number="A101",
+            storage_key="plans/test/a101.pdf",
+            created_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="3",
+            review_state=TakeoffItem.ReviewState.PENDING,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="2",
+            review_state=TakeoffItem.ReviewState.ACCEPTED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "question": "How many pending door takeoff items are on this plan set?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertEqual(payload["scope"]["plan_set_name"], "Bid Set A")
+        self.assertIn("pending", payload["answer"].lower())
+        self.assertTrue(any(citation["kind"] == "takeoff_summary" for citation in payload["citations"]))
+
+    def test_preconstruction_copilot_flags_document_questions(self):
+        self.client.login(username="estimator1", password="test-pass")
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "question": "What spec section covers the door hardware package?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "needs_documents")
+        self.assertIn("not ingesting specs", payload["answer"].lower())
+        self.assertTrue(any(citation["kind"] == "project" for citation in payload["citations"]))
+
+    def test_preconstruction_copilot_reports_latest_snapshot_and_export(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Bid Set B",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        snapshot = RevisionSnapshot.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            name="Pricing 1",
+            status=RevisionSnapshot.Status.LOCKED,
+            snapshot_payload_json=build_snapshot_payload(plan_set),
+            created_by=self.user,
+        )
+        ExportRecord.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            revision_snapshot=snapshot,
+            export_type=ExportRecord.ExportType.CSV,
+            status=ExportRecord.Status.GENERATED,
+            created_by=self.user,
+        )
+
+        snap_resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "question": "What is the latest snapshot status?",
+            },
+            format="json",
+        )
+        export_resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "question": "What was the last export created?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(snap_resp.status_code, 200)
+        self.assertEqual(snap_resp.json()["status"], "grounded")
+        self.assertIn("pricing 1", snap_resp.json()["answer"].lower())
+        self.assertTrue(any(citation["kind"] == "snapshot" for citation in snap_resp.json()["citations"]))
+
+        self.assertEqual(export_resp.status_code, 200)
+        self.assertEqual(export_resp.json()["status"], "grounded")
+        self.assertIn("csv", export_resp.json()["answer"].lower())
+        self.assertTrue(any(citation["kind"] == "export" for citation in export_resp.json()["citations"]))
+
+    def test_preconstruction_copilot_rejects_cross_project_scope(self):
+        self.client.login(username="estimator1", password="test-pass")
+        other_project = Project.objects.create(code="BID-6", name="Building F", location="Site V")
+        ProjectMembership.objects.create(
+            user=self.user,
+            project=other_project,
+            role=ProjectMembership.Role.PROJECT_MANAGER,
+        )
+        other_set = PlanSet.objects.create(
+            project=other_project,
+            name="Other Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(other_set.id),
+                "question": "List the plan sets for this project.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("plan set", str(resp.json()).lower())
+
     def test_preconstruction_requires_auth(self):
         plan_set = PlanSet.objects.create(
             project=self.project,

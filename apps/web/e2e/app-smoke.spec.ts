@@ -19,7 +19,7 @@ test("sign in and create a preconstruction plan set", async ({ page }) => {
 
   await page.getByRole("button", { name: "Create plan set" }).click();
   await page.getByLabel("Plan set name").fill(planSetName);
-  await page.getByRole("button", { name: "Create" }).click();
+  await page.getByRole("button", { name: "Create", exact: true }).click();
 
   await expect(page.getByText(planSetName)).toBeVisible();
   await expect(page.getByText("Select a plan set to view and upload sheets.")).toBeVisible();

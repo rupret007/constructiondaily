@@ -195,6 +195,29 @@ export type TakeoffSummary = {
   }>;
 };
 
+export type PreconstructionCopilotCitation = {
+  kind: string;
+  id: string;
+  label: string;
+  detail: string;
+};
+
+export type PreconstructionCopilotResponse = {
+  status: "grounded" | "limited" | "needs_documents";
+  answer: string;
+  scope: {
+    project_id: string;
+    project_code: string;
+    project_name: string;
+    plan_set_id: string | null;
+    plan_set_name: string | null;
+    plan_sheet_id: string | null;
+    plan_sheet_name: string | null;
+  };
+  citations: PreconstructionCopilotCitation[];
+  suggested_prompts: string[];
+};
+
 export type AIAnalysisRun = {
   id: string;
   project: string;

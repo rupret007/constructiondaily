@@ -6,6 +6,7 @@ from .views import (
     AnnotationItemViewSet,
     AnnotationLayerViewSet,
     ExportRecordViewSet,
+    PreconstructionCopilotViewSet,
     PlanSetViewSet,
     PlanSheetViewSet,
     RevisionSnapshotViewSet,
@@ -13,6 +14,7 @@ from .views import (
 )
 
 router = DefaultRouter()
+router.register("copilot", PreconstructionCopilotViewSet, basename="preconstruction-copilot")
 router.register("sets", PlanSetViewSet, basename="plan-set")
 router.register("sheets", PlanSheetViewSet, basename="plan-sheet")
 router.register("layers", AnnotationLayerViewSet, basename="annotation-layer")

@@ -23,11 +23,13 @@ from .models import (
     AISuggestion,
     AnnotationItem,
     AnnotationLayer,
+    ExportRecord,
     PlanSet,
     PlanSheet,
     RevisionSnapshot,
     TakeoffItem,
 )
+from .filetypes import plan_file_type_from_storage_key
 from .providers.registry import get_provider
 
 
@@ -76,6 +78,67 @@ SUPPORTED_ASSEMBLY_PROFILES = {
     ASSEMBLY_PROFILE_WINDOW_SET,
     ASSEMBLY_PROFILE_FIXTURE_SET,
 }
+
+COPILOT_DOCUMENT_KEYWORDS = (
+    "spec",
+    "specs",
+    "specification",
+    "specifications",
+    "rfi",
+    "rfis",
+    "submittal",
+    "submittals",
+    "addendum",
+    "addenda",
+    "vendor",
+    "vendors",
+    "cut sheet",
+    "cutsheet",
+    "scope letter",
+    "bid instruction",
+)
+COPILOT_HELP_KEYWORDS = (
+    "what can you do",
+    "what can i ask",
+    "help me",
+    "how can you help",
+    "capabilities",
+)
+COPILOT_PLAN_SET_KEYWORDS = ("plan set", "plan sets", "version", "versions", "bid set", "bid sets")
+COPILOT_SHEET_KEYWORDS = ("sheet", "sheets", "drawing", "drawings", "plan", "plans")
+COPILOT_TAKEOFF_KEYWORDS = ("takeoff", "take off", "count", "counts", "quantity", "quantities", "how many", "total")
+COPILOT_ANALYSIS_KEYWORDS = ("analysis", "analyze", "suggestion", "suggestions", "ai run", "ai", "vision")
+COPILOT_SNAPSHOT_KEYWORDS = ("snapshot", "snapshots", "revision", "revisions", "lock", "locked", "compare", "changed", "difference")
+COPILOT_EXPORT_KEYWORDS = ("export", "exports", "csv", "json", "download")
+COPILOT_FILETYPE_KEYWORDS = ("cad", "pdf", "dwg", "dxf", "file type", "file types")
+
+COPILOT_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    (
+        TakeoffItem.Category.DOOR_HARDWARE,
+        ("door hardware", "hardware", "doorknob", "doorknobs", "door knob", "door knobs"),
+    ),
+    (TakeoffItem.Category.DOORS, ("door", "doors")),
+    (TakeoffItem.Category.WINDOWS, ("window", "windows")),
+    (TakeoffItem.Category.OPENINGS, ("opening", "openings")),
+    (TakeoffItem.Category.ROOMS, ("room", "rooms")),
+    (
+        TakeoffItem.Category.PLUMBING_FIXTURES,
+        ("plumbing fixture", "plumbing fixtures", "fixture", "fixtures", "plumbing"),
+    ),
+    (
+        TakeoffItem.Category.ELECTRICAL_FIXTURES,
+        ("electrical fixture", "electrical fixtures", "light fixture", "light fixtures", "electrical"),
+    ),
+    (TakeoffItem.Category.CONCRETE_AREAS, ("concrete", "slab", "slabs", "area", "areas")),
+    (TakeoffItem.Category.LINEAR_MEASUREMENTS, ("linear", "length", "run", "runs", "lf")),
+]
+
+COPILOT_REVIEW_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    (TakeoffItem.ReviewState.PENDING, ("pending", "needs review", "to review")),
+    (TakeoffItem.ReviewState.ACCEPTED, ("accepted", "approved")),
+    (TakeoffItem.ReviewState.REJECTED, ("rejected", "discarded")),
+    (TakeoffItem.ReviewState.EDITED, ("edited", "adjusted")),
+]
 
 
 def _normalize_assembly_profile(value: Any) -> str:
@@ -303,6 +366,128 @@ def _normalize_estimator_quantity(quantity: Decimal, unit: str) -> Decimal:
         return _round_up_to_step(quantity, cubic_step)
 
     return quantity
+
+
+def _contains_any(text: str, keywords: tuple[str, ...] | list[str]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _choice_label(choice_enum, value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        return str(choice_enum(value).label)
+    except ValueError:
+        return value.replace("_", " ")
+
+
+def _sheet_label(sheet: PlanSheet | None) -> str:
+    if sheet is None:
+        return ""
+    return sheet.sheet_number or sheet.title or f"Sheet {str(sheet.id)[:8]}"
+
+
+def _scope_label(project, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> str:
+    if plan_sheet is not None:
+        return f"sheet {_sheet_label(plan_sheet)} in plan set {plan_sheet.plan_set.name}"
+    if plan_set is not None:
+        return f"plan set {plan_set.name}"
+    return f"project {project.code} - {project.name}"
+
+
+def _build_copilot_citation(kind: str, object_id: str, label: str, detail: str) -> dict[str, str]:
+    return {
+        "kind": kind,
+        "id": object_id,
+        "label": label,
+        "detail": detail,
+    }
+
+
+def _format_timestamp(value) -> str:
+    if value is None:
+        return "unknown time"
+    localized = timezone.localtime(value)
+    return localized.strftime("%b %d, %Y %I:%M %p")
+
+
+def _default_copilot_prompts(plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> list[str]:
+    if plan_sheet is not None:
+        sheet_name = _sheet_label(plan_sheet)
+        return [
+            f"How many pending takeoff items are on {sheet_name}?",
+            f"Is {sheet_name} calibrated for quantity takeoff?",
+            f"What was the latest AI analysis run on {sheet_name}?",
+            "What is the latest snapshot status for this plan set?",
+        ]
+    if plan_set is not None:
+        return [
+            "How many pending takeoff items are on this plan set?",
+            "Which sheets in this plan set are calibrated?",
+            "What is the latest snapshot status for this plan set?",
+            "What was the last export created for this plan set?",
+        ]
+    return [
+        "List the plan sets for this project.",
+        "How many takeoff items exist across this project?",
+        "Which sheets are calibrated?",
+        "What is the latest export created for this project?",
+    ]
+
+
+def _copilot_scope_payload(project, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> dict[str, str | None]:
+    return {
+        "project_id": str(project.id),
+        "project_code": project.code,
+        "project_name": project.name,
+        "plan_set_id": str(plan_set.id) if plan_set else None,
+        "plan_set_name": plan_set.name if plan_set else None,
+        "plan_sheet_id": str(plan_sheet.id) if plan_sheet else None,
+        "plan_sheet_name": _sheet_label(plan_sheet) if plan_sheet else None,
+    }
+
+
+def _build_copilot_result(
+    *,
+    status: str,
+    answer: str,
+    project,
+    plan_set: PlanSet | None,
+    plan_sheet: PlanSheet | None,
+    citations: list[dict[str, str]],
+    suggested_prompts: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "answer": answer,
+        "scope": _copilot_scope_payload(project, plan_set, plan_sheet),
+        "citations": citations,
+        "suggested_prompts": suggested_prompts or _default_copilot_prompts(plan_set, plan_sheet),
+    }
+
+
+def _detect_requested_categories(question_lower: str) -> list[str]:
+    matches: list[str] = []
+    for category, keywords in COPILOT_CATEGORY_KEYWORDS:
+        if _contains_any(question_lower, keywords):
+            matches.append(category)
+    return matches
+
+
+def _detect_requested_review_state(question_lower: str) -> str | None:
+    for review_state, keywords in COPILOT_REVIEW_KEYWORDS:
+        if _contains_any(question_lower, keywords):
+            return review_state
+    return None
+
+
+def _format_unit_totals(unit_totals: list[dict[str, Any]]) -> str:
+    if not unit_totals:
+        return "no measurable quantity yet"
+    return ", ".join(
+        f"{row['quantity_total']} {_choice_label(TakeoffItem.Unit, row['unit']).lower()}"
+        for row in unit_totals
+    )
 
 
 def _detect_assembly_profile(category: str, label: str | None) -> str | None:
@@ -697,6 +882,677 @@ def build_takeoff_summary(queryset) -> dict[str, Any]:
             for row in queryset.values("source").annotate(item_count=Count("id")).order_by("source")
         ],
     }
+
+
+def _answer_copilot_help(project, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> dict[str, Any]:
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    answer = (
+        f"I can answer grounded questions about {scope_label} using the live preconstruction record: "
+        "plan sets, sheets, takeoff totals, AI analysis runs, snapshots, and exports. "
+        "I do not ingest specs, addenda, RFIs, or submittals yet, so I will call that out instead of guessing."
+    )
+    citations = [
+        _build_copilot_citation(
+            "project",
+            str(project.id),
+            f"{project.code} - {project.name}",
+            "Grounded scope includes plan sets, sheets, takeoff, AI runs, snapshots, and exports.",
+        )
+    ]
+    if plan_set is not None:
+        citations.append(
+            _build_copilot_citation(
+                "plan_set",
+                str(plan_set.id),
+                plan_set.name,
+                f"Scoped to plan set status {_choice_label(PlanSet.Status, plan_set.status).lower()}.",
+            )
+        )
+    if plan_sheet is not None:
+        citations.append(
+            _build_copilot_citation(
+                "plan_sheet",
+                str(plan_sheet.id),
+                _sheet_label(plan_sheet),
+                f"Scoped to {plan_file_type_from_storage_key(plan_sheet.storage_key).upper()} sheet.",
+            )
+        )
+    return _build_copilot_result(
+        status="limited",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_document_gap(project, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> dict[str, Any]:
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    answer = (
+        f"I cannot answer that from {scope_label} yet because this copilot is not ingesting specs, addenda, RFIs, "
+        "submittals, or vendor documents. The right sources for that question would be the project spec book, "
+        "addenda log, RFI register, or submittal package once those documents are connected."
+    )
+    citations = [
+        _build_copilot_citation(
+            "project",
+            str(project.id),
+            f"{project.code} - {project.name}",
+            "Current grounded scope excludes external project documents.",
+        )
+    ]
+    return _build_copilot_result(
+        status="needs_documents",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_plan_set_question(project, plan_sets, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> dict[str, Any]:
+    if plan_set is not None:
+        sheet_count = plan_set.sheets.count()
+        answer = (
+            f"{plan_set.name} is currently {_choice_label(PlanSet.Status, plan_set.status).lower()} and has "
+            f"{sheet_count} sheet{'s' if sheet_count != 1 else ''}."
+        )
+        citations = [
+            _build_copilot_citation(
+                "plan_set",
+                str(plan_set.id),
+                plan_set.name,
+                f"Status {_choice_label(PlanSet.Status, plan_set.status).lower()}, {sheet_count} sheets.",
+            )
+        ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    total = plan_sets.count()
+    if total == 0:
+        answer = f"I do not have any plan sets yet for project {project.code} - {project.name}."
+        citations = [
+            _build_copilot_citation(
+                "project",
+                str(project.id),
+                f"{project.code} - {project.name}",
+                "No plan sets exist yet.",
+            )
+        ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    listed_sets = list(plan_sets[:5])
+    details = ", ".join(
+        f"{item.name} ({_choice_label(PlanSet.Status, item.status).lower()}, {item.sheets.count()} sheets)"
+        for item in listed_sets
+    )
+    answer = f"This project has {total} plan set{'s' if total != 1 else ''}: {details}."
+    citations = [
+        _build_copilot_citation(
+            "plan_set",
+            str(item.id),
+            item.name,
+            f"Status {_choice_label(PlanSet.Status, item.status).lower()}, {item.sheets.count()} sheets.",
+        )
+        for item in listed_sets
+    ]
+    return _build_copilot_result(
+        status="grounded",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_sheet_question(project, sheets, plan_set: PlanSet | None, plan_sheet: PlanSheet | None, question_lower: str) -> dict[str, Any]:
+    sheet_count = sheets.count()
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    if sheet_count == 0:
+        answer = f"I do not have any sheets in {scope_label} yet."
+        citations = [
+            _build_copilot_citation(
+                "project",
+                str(project.id),
+                f"{project.code} - {project.name}",
+                f"No sheets found in {scope_label}.",
+            )
+        ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    if "calibrat" in question_lower or "scale" in question_lower:
+        calibrated_sheets = [
+            sheet for sheet in sheets if sheet.calibrated_width is not None and sheet.calibrated_height is not None
+        ]
+        if plan_sheet is not None:
+            if calibrated_sheets:
+                sheet = calibrated_sheets[0]
+                answer = (
+                    f"{_sheet_label(sheet)} is calibrated at {sheet.calibrated_width} by {sheet.calibrated_height} "
+                    f"{sheet.calibrated_unit}."
+                )
+            else:
+                answer = f"{_sheet_label(plan_sheet)} is not calibrated yet."
+            citations = [
+                _build_copilot_citation(
+                    "plan_sheet",
+                    str(plan_sheet.id),
+                    _sheet_label(plan_sheet),
+                    "Calibration present." if calibrated_sheets else "No calibration values stored.",
+                )
+            ]
+        else:
+            answer = (
+                f"{len(calibrated_sheets)} of {sheet_count} sheet{'s' if sheet_count != 1 else ''} in {scope_label} "
+                "currently have calibration values."
+            )
+            citations = [
+                _build_copilot_citation(
+                    "plan_sheet",
+                    str(sheet.id),
+                    _sheet_label(sheet),
+                    f"Calibrated at {sheet.calibrated_width} x {sheet.calibrated_height} {sheet.calibrated_unit}.",
+                )
+                for sheet in calibrated_sheets[:5]
+            ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    listed_sheets = list(sheets[:5])
+    details = ", ".join(
+        f"{_sheet_label(sheet)} ({plan_file_type_from_storage_key(sheet.storage_key).upper()}, {sheet.parse_status})"
+        for sheet in listed_sheets
+    )
+    answer = f"I found {sheet_count} sheet{'s' if sheet_count != 1 else ''} in {scope_label}: {details}."
+    citations = [
+        _build_copilot_citation(
+            "plan_sheet",
+            str(sheet.id),
+            _sheet_label(sheet),
+            f"{plan_file_type_from_storage_key(sheet.storage_key).upper()} sheet, parse status {sheet.parse_status}.",
+        )
+        for sheet in listed_sheets
+    ]
+    return _build_copilot_result(
+        status="grounded",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_filetype_question(project, sheets, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> dict[str, Any]:
+    file_counts = {"pdf": 0, "dxf": 0, "dwg": 0, "unknown": 0}
+    for sheet in sheets:
+        file_type = plan_file_type_from_storage_key(sheet.storage_key)
+        file_counts[file_type if file_type in file_counts else "unknown"] += 1
+
+    cad_count = file_counts["dxf"] + file_counts["dwg"]
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    answer = (
+        f"In {scope_label}, I see {file_counts['pdf']} PDF sheet{'s' if file_counts['pdf'] != 1 else ''}, "
+        f"{file_counts['dxf']} DXF sheet{'s' if file_counts['dxf'] != 1 else ''}, and "
+        f"{file_counts['dwg']} DWG sheet{'s' if file_counts['dwg'] != 1 else ''}. "
+        f"That gives you {cad_count} CAD-native sheet{'s' if cad_count != 1 else ''} in scope."
+    )
+    citations = [
+        _build_copilot_citation(
+            "file_types",
+            f"{project.id}:{plan_set.id if plan_set else 'all'}:{plan_sheet.id if plan_sheet else 'all'}",
+            "Sheet file types",
+            f"PDF {file_counts['pdf']}, DXF {file_counts['dxf']}, DWG {file_counts['dwg']}, unknown {file_counts['unknown']}.",
+        )
+    ]
+    return _build_copilot_result(
+        status="grounded",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_takeoff_question(project, takeoffs, plan_set: PlanSet | None, plan_sheet: PlanSheet | None, question_lower: str) -> dict[str, Any]:
+    requested_categories = _detect_requested_categories(question_lower)
+    requested_review_state = _detect_requested_review_state(question_lower)
+    filtered_takeoffs = takeoffs
+    if requested_categories:
+        filtered_takeoffs = filtered_takeoffs.filter(category__in=requested_categories)
+    if requested_review_state:
+        filtered_takeoffs = filtered_takeoffs.filter(review_state=requested_review_state)
+
+    summary = build_takeoff_summary(filtered_takeoffs)
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    category_label = ", ".join(_choice_label(TakeoffItem.Category, value).lower() for value in requested_categories)
+    review_label = _choice_label(TakeoffItem.ReviewState, requested_review_state).lower() if requested_review_state else ""
+    filter_parts = [part for part in (review_label, category_label) if part]
+    filter_label = " ".join(filter_parts).strip()
+
+    if summary["total_items"] == 0:
+        answer = f"I did not find any {filter_label + ' ' if filter_label else ''}takeoff items in {scope_label} yet."
+        citations = [
+            _build_copilot_citation(
+                "takeoff_summary",
+                f"{project.id}:{plan_set.id if plan_set else 'all'}:{plan_sheet.id if plan_sheet else 'all'}",
+                "Takeoff summary",
+                "No matching takeoff rows.",
+            )
+        ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    quantity_text = _format_unit_totals(summary["unit_totals"])
+    answer = (
+        f"In {scope_label}, I found {summary['total_items']} {filter_label + ' ' if filter_label else ''}takeoff "
+        f"row{'s' if summary['total_items'] != 1 else ''} totaling {quantity_text}. "
+        f"{summary['pending_items']} pending, {summary['accepted_items']} accepted, "
+        f"{summary['edited_items']} edited, and {summary['rejected_items']} rejected."
+    )
+    top_categories = sorted(
+        summary["category_totals"],
+        key=lambda row: (-row["item_count"], row["category"], row["unit"]),
+    )[:3]
+    if top_categories and not requested_categories:
+        category_breakdown = ", ".join(
+            f"{_choice_label(TakeoffItem.Category, row['category']).lower()} {row['quantity_total']} "
+            f"{_choice_label(TakeoffItem.Unit, row['unit']).lower()}"
+            for row in top_categories
+        )
+        answer += f" Largest categories in scope are {category_breakdown}."
+
+    citations = [
+        _build_copilot_citation(
+            "takeoff_summary",
+            f"{project.id}:{plan_set.id if plan_set else 'all'}:{plan_sheet.id if plan_sheet else 'all'}",
+            "Takeoff summary",
+            f"{summary['total_items']} rows, {summary['pending_items']} pending, {summary['accepted_items']} accepted.",
+        )
+    ]
+    citations.extend(
+        _build_copilot_citation(
+            "takeoff_category",
+            row["category"],
+            _choice_label(TakeoffItem.Category, row["category"]),
+            f"{row['quantity_total']} {_choice_label(TakeoffItem.Unit, row['unit']).lower()} across {row['item_count']} rows.",
+        )
+        for row in top_categories
+    )
+    return _build_copilot_result(
+        status="grounded",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_analysis_question(project, runs, suggestions, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> dict[str, Any]:
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    run_count = runs.count()
+    if run_count == 0:
+        answer = f"I do not have any AI analysis runs in {scope_label} yet."
+        citations = [
+            _build_copilot_citation(
+                "analysis",
+                f"{project.id}:{plan_set.id if plan_set else 'all'}:{plan_sheet.id if plan_sheet else 'all'}",
+                "AI analysis",
+                "No analysis runs found in scope.",
+            )
+        ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    latest_run = runs.first()
+    suggestion_counts = {
+        row["decision_state"]: row["item_count"]
+        for row in suggestions.values("decision_state").annotate(item_count=Count("id")).order_by("decision_state")
+    }
+    answer = (
+        f"I found {run_count} AI analysis run{'s' if run_count != 1 else ''} in {scope_label}. "
+        f"The latest run used provider {latest_run.provider_name} on {_sheet_label(latest_run.plan_sheet)} and "
+        f"finished with status {_choice_label(AIAnalysisRun.Status, latest_run.status).lower()} at "
+        f"{_format_timestamp(latest_run.completed_at or latest_run.updated_at)}. "
+        f"Suggestion decisions in scope: {suggestion_counts.get(AISuggestion.DecisionState.PENDING, 0)} pending, "
+        f"{suggestion_counts.get(AISuggestion.DecisionState.ACCEPTED, 0)} accepted, "
+        f"{suggestion_counts.get(AISuggestion.DecisionState.EDITED, 0)} edited, and "
+        f"{suggestion_counts.get(AISuggestion.DecisionState.REJECTED, 0)} rejected."
+    )
+    citations = [
+        _build_copilot_citation(
+            "analysis_run",
+            str(latest_run.id),
+            f"{latest_run.provider_name} on {_sheet_label(latest_run.plan_sheet)}",
+            f"Status {_choice_label(AIAnalysisRun.Status, latest_run.status).lower()} at {_format_timestamp(latest_run.completed_at or latest_run.updated_at)}.",
+        ),
+        _build_copilot_citation(
+            "suggestions",
+            f"{project.id}:{plan_set.id if plan_set else 'all'}:{plan_sheet.id if plan_sheet else 'all'}",
+            "Suggestion decisions",
+            f"Pending {suggestion_counts.get(AISuggestion.DecisionState.PENDING, 0)}, accepted {suggestion_counts.get(AISuggestion.DecisionState.ACCEPTED, 0)}, edited {suggestion_counts.get(AISuggestion.DecisionState.EDITED, 0)}, rejected {suggestion_counts.get(AISuggestion.DecisionState.REJECTED, 0)}.",
+        ),
+    ]
+    return _build_copilot_result(
+        status="grounded",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_snapshot_question(project, snapshots, plan_set: PlanSet | None, plan_sheet: PlanSheet | None, question_lower: str) -> dict[str, Any]:
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    snapshot_count = snapshots.count()
+    if snapshot_count == 0:
+        answer = f"I do not have any revision snapshots in {scope_label} yet."
+        citations = [
+            _build_copilot_citation(
+                "snapshots",
+                f"{project.id}:{plan_set.id if plan_set else 'all'}",
+                "Revision snapshots",
+                "No snapshots found in scope.",
+            )
+        ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    latest_snapshot = snapshots.first()
+    status_counts = {
+        row["status"]: row["item_count"]
+        for row in snapshots.values("status").annotate(item_count=Count("id")).order_by("status")
+    }
+    answer = (
+        f"I found {snapshot_count} revision snapshot{'s' if snapshot_count != 1 else ''} in {scope_label}. "
+        f"The latest is {latest_snapshot.name} with status {_choice_label(RevisionSnapshot.Status, latest_snapshot.status).lower()} "
+        f"created at {_format_timestamp(latest_snapshot.created_at)}."
+    )
+    if _contains_any(question_lower, ("compare", "changed", "difference")):
+        answer += " I can report snapshot presence and status now, but structured revision diffing is still a later phase."
+        status = "limited"
+    else:
+        answer += (
+            f" Snapshot status counts in scope are draft {status_counts.get(RevisionSnapshot.Status.DRAFT, 0)}, "
+            f"submitted {status_counts.get(RevisionSnapshot.Status.SUBMITTED, 0)}, approved {status_counts.get(RevisionSnapshot.Status.APPROVED, 0)}, "
+            f"and locked {status_counts.get(RevisionSnapshot.Status.LOCKED, 0)}."
+        )
+        status = "grounded"
+
+    citations = [
+        _build_copilot_citation(
+            "snapshot",
+            str(latest_snapshot.id),
+            latest_snapshot.name,
+            f"Status {_choice_label(RevisionSnapshot.Status, latest_snapshot.status).lower()} created at {_format_timestamp(latest_snapshot.created_at)}.",
+        )
+    ]
+    return _build_copilot_result(
+        status=status,
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_export_question(project, exports, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> dict[str, Any]:
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    export_count = exports.count()
+    if export_count == 0:
+        answer = f"I do not have any exports in {scope_label} yet."
+        citations = [
+            _build_copilot_citation(
+                "exports",
+                f"{project.id}:{plan_set.id if plan_set else 'all'}",
+                "Exports",
+                "No exports found in scope.",
+            )
+        ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    latest_export = exports.first()
+    answer = (
+        f"I found {export_count} export{'s' if export_count != 1 else ''} in {scope_label}. "
+        f"The latest export is {_choice_label(ExportRecord.ExportType, latest_export.export_type).lower()} with status "
+        f"{_choice_label(ExportRecord.Status, latest_export.status).lower()} created at {_format_timestamp(latest_export.created_at)}."
+    )
+    citations = [
+        _build_copilot_citation(
+            "export",
+            str(latest_export.id),
+            _choice_label(ExportRecord.ExportType, latest_export.export_type),
+            f"Status {_choice_label(ExportRecord.Status, latest_export.status).lower()} created at {_format_timestamp(latest_export.created_at)}.",
+        )
+    ]
+    if latest_export.revision_snapshot_id:
+        citations.append(
+            _build_copilot_citation(
+                "snapshot",
+                str(latest_export.revision_snapshot_id),
+                latest_export.revision_snapshot.name if latest_export.revision_snapshot else "Linked snapshot",
+                "Export references a revision snapshot.",
+            )
+        )
+    return _build_copilot_result(
+        status="grounded",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_general_summary(
+    project,
+    plan_sets,
+    sheets,
+    takeoffs,
+    snapshots,
+    exports,
+    plan_set: PlanSet | None,
+    plan_sheet: PlanSheet | None,
+) -> dict[str, Any]:
+    takeoff_summary = build_takeoff_summary(takeoffs)
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    answer = (
+        f"For {scope_label}, I currently see {plan_sets.count()} plan set{'s' if plan_sets.count() != 1 else ''}, "
+        f"{sheets.count()} sheet{'s' if sheets.count() != 1 else ''}, and {takeoff_summary['total_items']} takeoff row{'s' if takeoff_summary['total_items'] != 1 else ''}. "
+        f"Takeoff review is {takeoff_summary['pending_items']} pending, {takeoff_summary['accepted_items']} accepted, "
+        f"{takeoff_summary['edited_items']} edited, and {takeoff_summary['rejected_items']} rejected."
+    )
+    latest_snapshot = snapshots.first()
+    latest_export = exports.first()
+    if latest_snapshot is not None:
+        answer += (
+            f" Latest snapshot: {latest_snapshot.name} "
+            f"({_choice_label(RevisionSnapshot.Status, latest_snapshot.status).lower()})."
+        )
+    if latest_export is not None:
+        answer += (
+            f" Latest export: {_choice_label(ExportRecord.ExportType, latest_export.export_type).lower()} "
+            f"({_choice_label(ExportRecord.Status, latest_export.status).lower()})."
+        )
+
+    citations = [
+        _build_copilot_citation(
+            "project",
+            str(project.id),
+            f"{project.code} - {project.name}",
+            f"{plan_sets.count()} plan sets, {sheets.count()} sheets, {takeoff_summary['total_items']} takeoff rows in scope.",
+        ),
+        _build_copilot_citation(
+            "takeoff_summary",
+            f"{project.id}:{plan_set.id if plan_set else 'all'}:{plan_sheet.id if plan_sheet else 'all'}",
+            "Takeoff summary",
+            f"Pending {takeoff_summary['pending_items']}, accepted {takeoff_summary['accepted_items']}, edited {takeoff_summary['edited_items']}, rejected {takeoff_summary['rejected_items']}.",
+        ),
+    ]
+    if latest_snapshot is not None:
+        citations.append(
+            _build_copilot_citation(
+                "snapshot",
+                str(latest_snapshot.id),
+                latest_snapshot.name,
+                f"Status {_choice_label(RevisionSnapshot.Status, latest_snapshot.status).lower()}.",
+            )
+        )
+    if latest_export is not None:
+        citations.append(
+            _build_copilot_citation(
+                "export",
+                str(latest_export.id),
+                _choice_label(ExportRecord.ExportType, latest_export.export_type),
+                f"Status {_choice_label(ExportRecord.Status, latest_export.status).lower()}.",
+            )
+        )
+    return _build_copilot_result(
+        status="grounded",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def answer_preconstruction_question(
+    *,
+    project,
+    question: str,
+    plan_set: PlanSet | None = None,
+    plan_sheet: PlanSheet | None = None,
+) -> dict[str, Any]:
+    if plan_sheet is not None and plan_set is None:
+        plan_set = plan_sheet.plan_set
+
+    question_text = (question or "").strip()
+    if not question_text:
+        raise ValueError("Question is required.")
+
+    question_lower = question_text.lower()
+    project_plan_sets = PlanSet.objects.filter(project=project).order_by("-created_at")
+    scoped_plan_sets = project_plan_sets.filter(id=plan_set.id) if plan_set is not None else project_plan_sets
+
+    scoped_sheets = PlanSheet.objects.filter(project=project).order_by("sheet_index", "created_at")
+    if plan_set is not None:
+        scoped_sheets = scoped_sheets.filter(plan_set=plan_set)
+    if plan_sheet is not None:
+        scoped_sheets = scoped_sheets.filter(id=plan_sheet.id)
+
+    scoped_takeoffs = TakeoffItem.objects.filter(project=project)
+    if plan_set is not None:
+        scoped_takeoffs = scoped_takeoffs.filter(plan_set=plan_set)
+    if plan_sheet is not None:
+        scoped_takeoffs = scoped_takeoffs.filter(plan_sheet=plan_sheet)
+
+    scoped_runs = AIAnalysisRun.objects.filter(project=project).select_related("plan_sheet").order_by("-created_at")
+    if plan_set is not None:
+        scoped_runs = scoped_runs.filter(plan_set=plan_set)
+    if plan_sheet is not None:
+        scoped_runs = scoped_runs.filter(plan_sheet=plan_sheet)
+
+    scoped_suggestions = AISuggestion.objects.filter(project=project)
+    if plan_set is not None:
+        scoped_suggestions = scoped_suggestions.filter(analysis_run__plan_set=plan_set)
+    if plan_sheet is not None:
+        scoped_suggestions = scoped_suggestions.filter(plan_sheet=plan_sheet)
+
+    scoped_snapshots = RevisionSnapshot.objects.filter(project=project).order_by("-created_at")
+    if plan_set is not None:
+        scoped_snapshots = scoped_snapshots.filter(plan_set=plan_set)
+
+    scoped_exports = ExportRecord.objects.filter(project=project).select_related("revision_snapshot").order_by("-created_at")
+    if plan_set is not None:
+        scoped_exports = scoped_exports.filter(plan_set=plan_set)
+
+    if _contains_any(question_lower, COPILOT_DOCUMENT_KEYWORDS):
+        return _answer_document_gap(project, plan_set, plan_sheet)
+    if _contains_any(question_lower, COPILOT_HELP_KEYWORDS):
+        return _answer_copilot_help(project, plan_set, plan_sheet)
+    if _contains_any(question_lower, COPILOT_TAKEOFF_KEYWORDS) or _detect_requested_categories(question_lower):
+        return _answer_takeoff_question(project, scoped_takeoffs, plan_set, plan_sheet, question_lower)
+    if _contains_any(question_lower, COPILOT_FILETYPE_KEYWORDS):
+        return _answer_filetype_question(project, scoped_sheets, plan_set, plan_sheet)
+    if _contains_any(question_lower, COPILOT_SNAPSHOT_KEYWORDS):
+        return _answer_snapshot_question(project, scoped_snapshots, plan_set, plan_sheet, question_lower)
+    if _contains_any(question_lower, COPILOT_EXPORT_KEYWORDS):
+        return _answer_export_question(project, scoped_exports, plan_set, plan_sheet)
+    if _contains_any(question_lower, COPILOT_ANALYSIS_KEYWORDS):
+        return _answer_analysis_question(project, scoped_runs, scoped_suggestions, plan_set, plan_sheet)
+    if _contains_any(question_lower, COPILOT_SHEET_KEYWORDS):
+        return _answer_sheet_question(project, scoped_sheets, plan_set, plan_sheet, question_lower)
+    if _contains_any(question_lower, COPILOT_PLAN_SET_KEYWORDS):
+        return _answer_plan_set_question(project, scoped_plan_sets, plan_set, plan_sheet)
+    return _answer_general_summary(
+        project,
+        scoped_plan_sets,
+        scoped_sheets,
+        scoped_takeoffs,
+        scoped_snapshots,
+        scoped_exports,
+        plan_set,
+        plan_sheet,
+    )
 
 
 def run_plan_analysis(

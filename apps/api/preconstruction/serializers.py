@@ -7,6 +7,8 @@ from decimal import Decimal
 from django.contrib.auth.models import User
 from rest_framework import serializers
 
+from core.models import Project
+
 from .filetypes import plan_file_extension_from_name, plan_file_type_from_storage_key
 from .models import (
     AIAnalysisRun,
@@ -277,6 +279,53 @@ class TakeoffItemSerializer(serializers.ModelSerializer):
                 except ValueError as exc:
                     raise serializers.ValidationError({"quantity": str(exc)})
         return attrs
+
+
+class PreconstructionCopilotQuerySerializer(serializers.Serializer):
+    project = serializers.PrimaryKeyRelatedField(queryset=Project.objects.all())
+    plan_set = serializers.PrimaryKeyRelatedField(queryset=PlanSet.objects.all(), required=False, allow_null=True)
+    plan_sheet = serializers.PrimaryKeyRelatedField(queryset=PlanSheet.objects.all(), required=False, allow_null=True)
+    question = serializers.CharField(max_length=2000, trim_whitespace=True)
+
+    def validate(self, attrs):
+        project = attrs["project"]
+        plan_set = attrs.get("plan_set")
+        plan_sheet = attrs.get("plan_sheet")
+
+        if not attrs.get("question", "").strip():
+            raise serializers.ValidationError({"question": "This field may not be blank."})
+        if plan_set and plan_set.project_id != project.id:
+            raise serializers.ValidationError({"plan_set": "Plan set must belong to the selected project."})
+        if plan_sheet and plan_sheet.project_id != project.id:
+            raise serializers.ValidationError({"plan_sheet": "Plan sheet must belong to the selected project."})
+        if plan_set and plan_sheet and plan_sheet.plan_set_id != plan_set.id:
+            raise serializers.ValidationError({"plan_sheet": "Plan sheet must belong to the selected plan set."})
+        return attrs
+
+
+class PreconstructionCopilotCitationSerializer(serializers.Serializer):
+    kind = serializers.CharField()
+    id = serializers.CharField()
+    label = serializers.CharField()
+    detail = serializers.CharField()
+
+
+class PreconstructionCopilotScopeSerializer(serializers.Serializer):
+    project_id = serializers.CharField()
+    project_code = serializers.CharField()
+    project_name = serializers.CharField()
+    plan_set_id = serializers.CharField(allow_blank=True, allow_null=True)
+    plan_set_name = serializers.CharField(allow_blank=True, allow_null=True)
+    plan_sheet_id = serializers.CharField(allow_blank=True, allow_null=True)
+    plan_sheet_name = serializers.CharField(allow_blank=True, allow_null=True)
+
+
+class PreconstructionCopilotResponseSerializer(serializers.Serializer):
+    status = serializers.CharField()
+    answer = serializers.CharField()
+    scope = PreconstructionCopilotScopeSerializer()
+    citations = PreconstructionCopilotCitationSerializer(many=True)
+    suggested_prompts = serializers.ListField(child=serializers.CharField(), required=False)
 
 
 class AIAnalysisRunSerializer(serializers.ModelSerializer):

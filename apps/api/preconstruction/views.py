@@ -6,6 +6,7 @@ from django.conf import settings
 from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -13,7 +14,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from audit.services import record_audit_event
-from core.models import ProjectMembership
+from core.models import Project, ProjectMembership
 from core.permissions import user_has_project_role
 
 from .cad import build_cad_preview
@@ -34,6 +35,8 @@ from .serializers import (
     AnnotationItemSerializer,
     AnnotationLayerSerializer,
     ExportRecordSerializer,
+    PreconstructionCopilotQuerySerializer,
+    PreconstructionCopilotResponseSerializer,
     PlanSetSerializer,
     PlanSheetCreateSerializer,
     PlanSheetSerializer,
@@ -42,6 +45,7 @@ from .serializers import (
 )
 from .services import (
     accept_suggestion,
+    answer_preconstruction_question,
     batch_accept_suggestions,
     build_takeoff_summary,
     build_snapshot_payload,
@@ -75,6 +79,36 @@ def _project_ids_for_user(user):
             "project_id", flat=True
         )
     )
+
+
+class PreconstructionCopilotViewSet(viewsets.GenericViewSet):
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["post", "head", "options"]
+    serializer_class = PreconstructionCopilotResponseSerializer
+
+    @extend_schema(
+        request=PreconstructionCopilotQuerySerializer,
+        responses={200: PreconstructionCopilotResponseSerializer},
+    )
+    @action(detail=False, methods=["post"], url_path="query")
+    def query(self, request):
+        serializer = PreconstructionCopilotQuerySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        project = serializer.validated_data["project"]
+        if project.id not in _project_ids_for_user(request.user):
+            raise PermissionDenied("Insufficient permissions.")
+
+        response_payload = answer_preconstruction_question(
+            project=project,
+            plan_set=serializer.validated_data.get("plan_set"),
+            plan_sheet=serializer.validated_data.get("plan_sheet"),
+            question=serializer.validated_data["question"],
+        )
+        return Response(
+            PreconstructionCopilotResponseSerializer(response_payload).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class PlanSetViewSet(viewsets.ModelViewSet):

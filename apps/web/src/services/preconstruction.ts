@@ -5,6 +5,7 @@ import type {
   AnnotationItem,
   AnnotationLayer,
   ExportRecord,
+  PreconstructionCopilotResponse,
   PlanSet,
   PlanSheetCadPreview,
   PlanSheet,
@@ -241,6 +242,18 @@ export async function updateTakeoffItem(
 
 export async function deleteTakeoffItem(takeoffId: string): Promise<void> {
   return apiRequest<void>(`${P}/takeoff/${takeoffId}/`, { method: "DELETE" });
+}
+
+export async function queryPreconstructionCopilot(payload: {
+  project: string;
+  plan_set?: string | null;
+  plan_sheet?: string | null;
+  question: string;
+}): Promise<PreconstructionCopilotResponse> {
+  return apiRequest<PreconstructionCopilotResponse>(`${P}/copilot/query/`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function triggerAnalysis(

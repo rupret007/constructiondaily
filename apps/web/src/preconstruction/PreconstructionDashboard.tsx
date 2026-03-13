@@ -9,6 +9,7 @@ import {
   uploadPlanSheet,
 } from "../services/preconstruction";
 import type { PlanSet as PlanSetType, PlanSheet as PlanSheetType, Project } from "../types/api";
+import { PreconstructionCopilotPanel } from "./PreconstructionCopilotPanel";
 import { PlanSetList } from "./PlanSetList";
 import { PlanSheetList } from "./PlanSheetList";
 
@@ -119,6 +120,7 @@ export function PreconstructionDashboard({
   };
 
   const selectedPlanSet = planSets.find((s) => s.id === selectedPlanSetId);
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
 
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,40%)_1fr]">
@@ -191,28 +193,38 @@ export function PreconstructionDashboard({
           )}
         </CardContent>
       </Card>
-      <Card className="min-w-0">
-        <CardHeader>
-          <CardTitle>{selectedPlanSet?.name ?? "Plan set"}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {!selectedPlanSetId ? (
-            <p className="text-sm text-muted-foreground">
-              Select a plan set to view and upload sheets.
-            </p>
-          ) : (
-            <PlanSheetList
-              planSetId={selectedPlanSetId}
-              sheets={sheets}
-              loading={loading}
-              uploading={uploading}
-              onUpload={handleUploadSheet}
-              onRefresh={loadSheets}
-              onOpenSheet={(sheetId) => onOpenSheet(sheetId, selectedPlanSetId)}
-            />
-          )}
-        </CardContent>
-      </Card>
+      <div className="space-y-6">
+        <Card className="min-w-0">
+          <CardHeader>
+            <CardTitle>{selectedPlanSet?.name ?? "Plan set"}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {!selectedPlanSetId ? (
+              <p className="text-sm text-muted-foreground">
+                Select a plan set to view and upload sheets.
+              </p>
+            ) : (
+              <PlanSheetList
+                planSetId={selectedPlanSetId}
+                sheets={sheets}
+                loading={loading}
+                uploading={uploading}
+                onUpload={handleUploadSheet}
+                onRefresh={loadSheets}
+                onOpenSheet={(sheetId) => onOpenSheet(sheetId, selectedPlanSetId)}
+              />
+            )}
+          </CardContent>
+        </Card>
+        {projectId && selectedProject ? (
+          <PreconstructionCopilotPanel
+            projectId={projectId}
+            projectLabel={`${selectedProject.code} - ${selectedProject.name}`}
+            planSetId={selectedPlanSetId || undefined}
+            planSetName={selectedPlanSet?.name}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
