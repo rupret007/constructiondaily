@@ -96,6 +96,88 @@ class PlanSheet(TimeStampedModel):
     def __str__(self) -> str:
         return f"{self.plan_set.name} — {self.title or self.sheet_number or str(self.id)[:8]}"
 
+class ProjectDocument(TimeStampedModel):
+    """Project-scoped document used for grounded estimator retrieval."""
+
+    class DocumentType(models.TextChoices):
+        SPEC = "spec", "Specification"
+        ADDENDUM = "addendum", "Addendum"
+        RFI = "rfi", "RFI"
+        SUBMITTAL = "submittal", "Submittal"
+        VENDOR = "vendor", "Vendor"
+        SCOPE = "scope", "Scope"
+        OTHER = "other", "Other"
+
+    class ParseStatus(models.TextChoices):
+        UPLOADED = "uploaded", "Uploaded"
+        PARSED = "parsed", "Parsed"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="project_documents")
+    plan_set = models.ForeignKey(
+        PlanSet,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="project_documents",
+    )
+    title = models.CharField(max_length=255)
+    document_type = models.CharField(max_length=32, choices=DocumentType.choices, default=DocumentType.OTHER)
+    original_filename = models.CharField(max_length=255)
+    storage_key = models.CharField(max_length=512)
+    mime_type = models.CharField(max_length=128)
+    file_extension = models.CharField(max_length=16)
+    size_bytes = models.BigIntegerField()
+    page_count = models.PositiveIntegerField(default=0)
+    extracted_text = models.TextField(blank=True)
+    parse_status = models.CharField(max_length=32, choices=ParseStatus.choices, default=ParseStatus.UPLOADED)
+    parse_error = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_project_documents",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="updated_project_documents",
+    )
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"{self.project.code} â€” {self.title}"
+
+
+class ProjectDocumentChunk(TimeStampedModel):
+    """Searchable chunk extracted from a project document."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document = models.ForeignKey(
+        ProjectDocument,
+        on_delete=models.CASCADE,
+        related_name="chunks",
+    )
+    chunk_index = models.PositiveIntegerField()
+    page_number = models.PositiveIntegerField(null=True, blank=True)
+    content = models.TextField()
+
+    class Meta:
+        ordering = ("document", "chunk_index")
+        constraints = [
+            models.UniqueConstraint(fields=("document", "chunk_index"), name="unique_document_chunk_index"),
+        ]
+
+    def __str__(self) -> str:
+        page_part = f" p{self.page_number}" if self.page_number else ""
+        return f"{self.document.title}{page_part} #{self.chunk_index}"
+
 
 class AnnotationLayer(TimeStampedModel):
     """Logical layer of annotations on a sheet (visibility, lock, category)."""

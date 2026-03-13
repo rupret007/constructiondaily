@@ -87,6 +87,26 @@ export type PlanSheet = {
   updated_at: string;
 };
 
+export type ProjectDocument = {
+  id: string;
+  project: string;
+  plan_set: string | null;
+  title: string;
+  document_type: "spec" | "addendum" | "rfi" | "submittal" | "vendor" | "scope" | "other";
+  original_filename: string;
+  storage_key: string;
+  mime_type: string;
+  file_extension: string;
+  size_bytes: number;
+  page_count: number;
+  parse_status: "uploaded" | "parsed" | "failed";
+  parse_error: string;
+  created_by?: ApiUser;
+  updated_by?: ApiUser;
+  created_at: string;
+  updated_at: string;
+};
+
 export type PlanSheetCadPreviewItem = {
   id: number;
   entity_type: string;

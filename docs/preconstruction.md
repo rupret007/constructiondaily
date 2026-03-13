@@ -1,6 +1,6 @@
 # Preconstruction Plan Annotation
 
-Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and DWG), on-sheet annotation, takeoff tracking, AI suggestion review (configurable provider), revision snapshots, and exports.
+Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and DWG), project document ingestion (PDF, TXT, MD), on-sheet annotation, takeoff tracking, AI suggestion review (configurable provider), revision snapshots, and exports.
 
 ## Access and roles
 
@@ -14,22 +14,28 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 1. Open **Preconstruction** and choose a project.
 2. Create a plan set.
 3. Upload one or more plan files (`.pdf`, `.dxf`, or `.dwg`) to the selected plan set.
-4. Use the typed **Estimator Copilot** on the dashboard to ask grounded questions about the selected project or plan set.
-5. Open a sheet in the viewer.
-6. Create point/rectangle/polygon/polyline annotations directly on the canvas.
-7. (Optional) Set sheet calibration (full-sheet width/height + unit) to enable auto area/length quantity estimates.
-8. Create takeoff items manually or from selected annotations (single-line or assembly package mode).
-9. Review takeoff rollups, filter the workspace, and edit quantity/cost code/bid package/review state as needed.
-10. Run AI analysis, then accept/reject/edit suggestions.
-11. Choose analysis provider per run (`mock`, `openai_vision` for PDF, or `cad_dxf` for DXF/DWG).
-12. Batch-accept high-confidence suggestions (default threshold 85%).
-13. Create snapshots and lock when final.
-14. Export JSON or CSV.
+4. Upload supporting project documents (`.pdf`, `.txt`, `.md`) as project-wide documents or scoped to the selected plan set.
+5. Use the typed **Estimator Copilot** on the dashboard to ask grounded questions about the selected project or plan set.
+6. Open a sheet in the viewer.
+7. Create point/rectangle/polygon/polyline annotations directly on the canvas.
+8. (Optional) Set sheet calibration (full-sheet width/height + unit) to enable auto area/length quantity estimates.
+9. Create takeoff items manually or from selected annotations (single-line or assembly package mode).
+10. Review takeoff rollups, filter the workspace, and edit quantity/cost code/bid package/review state as needed.
+11. Run AI analysis, then accept/reject/edit suggestions.
+12. Choose analysis provider per run (`mock`, `openai_vision` for PDF, or `cad_dxf` for DXF/DWG).
+13. Batch-accept high-confidence suggestions (default threshold 85%).
+14. Create snapshots and lock when final.
+15. Export JSON or CSV.
 
 ## Current capabilities
 
 - PDF rendering with zoom and drag pan.
 - CAD canvas preview for DXF/DWG sheets via normalized CAD entity geometry.
+- Project document upload and parsing for:
+  - `pdf`
+  - `txt`
+  - `md`
+  - optional plan-set scoping on top of project-wide docs
 - Layer visibility toggles.
 - Annotation inspector with delete and "create takeoff package" actions.
 - Takeoff review workspace with:
@@ -57,9 +63,11 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - fallback to `1` when calibration or geometry is insufficient
 - Typed estimator copilot on the dashboard:
   - answers from live plan-set, sheet, takeoff, AI run, snapshot, and export data
+  - searches parsed project documents and returns document citations when relevant
   - returns grounded citations for the records it used
   - scopes answers to the selected project and optional selected plan set
-  - explicitly reports when a question needs specs, RFIs, addenda, submittals, or vendor docs that are not ingested yet
+  - includes project-wide docs plus plan-set-scoped docs when a plan set is selected
+  - explicitly reports when a needed spec, RFI, addendum, submittal, or vendor doc is not uploaded or did not parse yet
 - Estimator-grade quantity normalization:
   - applies to AI-generated rows and manual takeoff create/edit flows
   - configurable waste factors for linear/area units
@@ -81,8 +89,10 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 - DWG support requires `PRECONSTRUCTION_DWG_CONVERTER_COMMAND` to convert DWG -> DXF server-side.
 - Binary DXF is still unsupported.
 - Provider quality still depends on prompt quality, plan clarity, and calibration quality.
-- The typed copilot does not yet ingest specs, addenda, RFIs, submittals, or vendor documents.
-- The typed copilot does not yet perform job-document Q&A, voice interaction, or structured revision diffs.
+- PDF project document parsing requires `PyMuPDF` in the API environment.
+- No OCR pipeline yet for scanned image-only PDFs.
+- Retrieval is deterministic text search for now; embeddings/reranking/model-grounded synthesis are later phases.
+- The typed copilot does not yet support voice interaction or structured revision diffs.
 - No snapshot diff/compare screen.
 - "PDF metadata" export remains a placeholder, not a generated PDF file.
 
@@ -114,6 +124,8 @@ Base path: `/api/preconstruction/`
 - `sheets/`: upload/list/retrieve/update/delete plan sheets
 - `sheets/{id}/file/`: serve uploaded sheet file (PDF/DXF/DWG)
 - `sheets/{id}/cad_preview/`: normalized CAD entity geometry for DXF/DWG canvas preview
+- `documents/`: upload/list/retrieve/delete project documents
+- `documents/{id}/file/`: serve uploaded project document file
 - `layers/`: annotation layers
 - `annotations/`: annotation CRUD
 - `annotations/{id}/create_takeoff/`: create takeoff package from one annotation (`assembly_profile` supported)

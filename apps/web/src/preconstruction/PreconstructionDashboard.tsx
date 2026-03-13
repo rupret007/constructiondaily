@@ -10,6 +10,7 @@ import {
 } from "../services/preconstruction";
 import type { PlanSet as PlanSetType, PlanSheet as PlanSheetType, Project } from "../types/api";
 import { PreconstructionCopilotPanel } from "./PreconstructionCopilotPanel";
+import { ProjectDocumentPanel } from "./ProjectDocumentPanel";
 import { PlanSetList } from "./PlanSetList";
 import { PlanSheetList } from "./PlanSheetList";
 
@@ -216,6 +217,13 @@ export function PreconstructionDashboard({
             )}
           </CardContent>
         </Card>
+        {projectId ? (
+          <ProjectDocumentPanel
+            projectId={projectId}
+            planSetId={selectedPlanSetId || undefined}
+            planSetName={selectedPlanSet?.name}
+          />
+        ) : null}
         {projectId && selectedProject ? (
           <PreconstructionCopilotPanel
             projectId={projectId}

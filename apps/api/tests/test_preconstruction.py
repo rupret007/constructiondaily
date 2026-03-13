@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
+from reportlab.pdfgen import canvas
 from rest_framework.test import APIClient
 
 from audit.models import AuditEvent
@@ -19,6 +20,7 @@ from preconstruction.models import (
     ExportRecord,
     PlanSet,
     PlanSheet,
+    ProjectDocument,
     RevisionSnapshot,
     TakeoffItem,
 )
@@ -47,6 +49,17 @@ MINIMAL_DXF = (
 
 # Minimal DWG-like header bytes for upload/signature validation.
 MINIMAL_DWG = b"AC1027\x00\x01MockDWGContent"
+
+
+def build_pdf_with_text(*lines: str) -> bytes:
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer)
+    y = 760
+    for line in lines:
+        pdf.drawString(72, y, line)
+        y -= 18
+    pdf.save()
+    return buffer.getvalue()
 
 
 class PreconstructionAPITests(TestCase):
@@ -2105,7 +2118,7 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(resp.status_code, 200)
         payload = resp.json()
         self.assertEqual(payload["status"], "needs_documents")
-        self.assertIn("not ingesting specs", payload["answer"].lower())
+        self.assertIn("do not have parsed project documents", payload["answer"].lower())
         self.assertTrue(any(citation["kind"] == "project" for citation in payload["citations"]))
 
     def test_preconstruction_copilot_reports_latest_snapshot_and_export(self):
@@ -2189,6 +2202,134 @@ class PreconstructionAPITests(TestCase):
 
         self.assertEqual(resp.status_code, 400)
         self.assertIn("plan set", str(resp.json()).lower())
+
+    def test_project_document_upload_extracts_pdf_text(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Docs Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        pdf = BytesIO(
+            build_pdf_with_text(
+                "Section 087100 door hardware.",
+                "Provide hardware set BH-1 at all rated openings.",
+            )
+        )
+        pdf.name = "door-spec.pdf"
+
+        resp = self.client.post(
+            "/api/preconstruction/documents/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "title": "Door Hardware Spec",
+                "document_type": "spec",
+                "file": pdf,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        payload = resp.json()
+        self.assertEqual(payload["parse_status"], ProjectDocument.ParseStatus.PARSED)
+        self.assertEqual(payload["document_type"], ProjectDocument.DocumentType.SPEC)
+        document = ProjectDocument.objects.get(id=payload["id"])
+        self.assertGreater(document.page_count, 0)
+        self.assertIn("BH-1", document.extracted_text)
+        self.assertGreater(document.chunks.count(), 0)
+        self.assertGreaterEqual(
+            AuditEvent.objects.filter(event_type="upload_project_document", object_id=str(document.id)).count(),
+            1,
+        )
+
+    def test_project_document_copilot_answers_from_uploaded_documents(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Docs Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        pdf = BytesIO(
+            build_pdf_with_text(
+                "Section 087100 door hardware.",
+                "Provide hardware set BH-1 at all rated openings.",
+                "Use brushed stainless lever hardware.",
+            )
+        )
+        pdf.name = "hardware-spec.pdf"
+        upload_resp = self.client.post(
+            "/api/preconstruction/documents/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "title": "Hardware Spec",
+                "document_type": "spec",
+                "file": pdf,
+            },
+            format="multipart",
+        )
+        self.assertEqual(upload_resp.status_code, 201)
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "question": "What hardware set is called for at rated openings?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertIn("bh-1", payload["answer"].lower())
+        self.assertTrue(any(citation["kind"] == "document" for citation in payload["citations"]))
+
+    def test_project_document_scope_includes_project_wide_docs_for_plan_set_queries(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Bid Set C",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        pdf = BytesIO(
+            build_pdf_with_text(
+                "Addendum 2.",
+                "All storefront framing shall use thermally broken members.",
+            )
+        )
+        pdf.name = "addendum.pdf"
+        upload_resp = self.client.post(
+            "/api/preconstruction/documents/",
+            {
+                "project": str(self.project.id),
+                "title": "Addendum 2",
+                "document_type": "addendum",
+                "file": pdf,
+            },
+            format="multipart",
+        )
+        self.assertEqual(upload_resp.status_code, 201)
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "question": "What does addendum 2 say about storefront framing?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertIn("thermally broken", payload["answer"].lower())
 
     def test_preconstruction_requires_auth(self):
         plan_set = PlanSet.objects.create(

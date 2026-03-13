@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
@@ -26,6 +27,7 @@ from .models import (
     ExportRecord,
     PlanSet,
     PlanSheet,
+    ProjectDocument,
     RevisionSnapshot,
     TakeoffItem,
 )
@@ -40,6 +42,8 @@ from .serializers import (
     PlanSetSerializer,
     PlanSheetCreateSerializer,
     PlanSheetSerializer,
+    ProjectDocumentCreateSerializer,
+    ProjectDocumentSerializer,
     RevisionSnapshotSerializer,
     TakeoffItemSerializer,
 )
@@ -55,14 +59,20 @@ from .services import (
     reject_suggestion,
     run_plan_analysis,
 )
+from .document_services import process_project_document
 from .providers.registry import get_provider
 from .filetypes import (
     plan_content_type_for_extension,
     plan_file_extension_from_name,
     plan_file_type_from_storage_key,
 )
-from .storage import get_plan_file_path, store_plan_file
-from .validators import validate_plan_upload
+from .storage import (
+    get_plan_file_path,
+    get_project_document_file_path,
+    store_plan_file,
+    store_project_document_file,
+)
+from .validators import validate_plan_upload, validate_project_document_upload
 
 
 PROJECT_WRITE_ROLES = (
@@ -274,6 +284,122 @@ class PlanSheetViewSet(viewsets.ModelViewSet):
         except RuntimeError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(preview, status=status.HTTP_200_OK)
+
+
+class ProjectDocumentViewSet(viewsets.ModelViewSet):
+    serializer_class = ProjectDocumentSerializer
+    queryset = ProjectDocument.objects.select_related("project", "plan_set", "created_by", "updated_by")
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ("project", "plan_set", "document_type", "parse_status")
+    ordering_fields = ("created_at", "title")
+
+    def get_queryset(self):
+        queryset = self.queryset.filter(project_id__in=_project_ids_for_user(self.request.user))
+        scope_plan_set = self.request.query_params.get("scope_plan_set")
+        if scope_plan_set:
+            queryset = queryset.filter(Q(plan_set_id=scope_plan_set) | Q(plan_set__isnull=True))
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        file_obj = request.FILES.get("file")
+        if not file_obj:
+            return Response({"detail": "file is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = {
+            "project": request.data.get("project"),
+            "document_type": request.data.get("document_type"),
+        }
+        if "plan_set" in request.data:
+            payload["plan_set"] = request.data.get("plan_set")
+        if "title" in request.data:
+            payload["title"] = request.data.get("title")
+
+        payload_serializer = ProjectDocumentCreateSerializer(data=payload)
+        payload_serializer.is_valid(raise_exception=True)
+        validated = payload_serializer.validated_data
+        project = validated["project"]
+        plan_set = validated.get("plan_set")
+        if project.id not in _project_ids_for_user(request.user):
+            raise PermissionDenied("Insufficient permissions.")
+        if not user_has_project_role(request.user, str(project.id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
+
+        ext, mime_type, size = validate_project_document_upload(file_obj)
+        title = validated.get("title") or file_obj.name.rsplit(".", 1)[0]
+        storage_key = store_project_document_file(
+            file_obj,
+            str(project.id),
+            str(plan_set.id) if plan_set else None,
+            ext,
+        )
+        document = ProjectDocument.objects.create(
+            project=project,
+            plan_set=plan_set,
+            title=title.strip()[:255],
+            document_type=validated["document_type"],
+            original_filename=file_obj.name,
+            storage_key=storage_key,
+            mime_type=mime_type or "application/octet-stream",
+            file_extension=ext,
+            size_bytes=size,
+            created_by=request.user,
+            updated_by=request.user,
+        )
+        process_project_document(document)
+        record_audit_event(
+            actor=request.user,
+            event_type="upload_project_document",
+            object_type="ProjectDocument",
+            object_id=str(document.id),
+            project_id=str(project.id),
+            metadata={
+                "document_type": document.document_type,
+                "plan_set_id": str(plan_set.id) if plan_set else "",
+                "parse_status": document.parse_status,
+            },
+        )
+        return Response(self.get_serializer(document).data, status=status.HTTP_201_CREATED)
+
+    def perform_update(self, serializer):
+        document = self.get_object()
+        if not user_has_project_role(self.request.user, str(document.project_id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
+        serializer.save(updated_by=self.request.user)
+        record_audit_event(
+            actor=self.request.user,
+            event_type="update_project_document",
+            object_type="ProjectDocument",
+            object_id=str(document.id),
+            project_id=str(document.project_id),
+            metadata={},
+        )
+
+    def perform_destroy(self, instance):
+        if not user_has_project_role(self.request.user, str(instance.project_id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
+        record_audit_event(
+            actor=self.request.user,
+            event_type="delete_project_document",
+            object_type="ProjectDocument",
+            object_id=str(instance.id),
+            project_id=str(instance.project_id),
+            metadata={"document_type": instance.document_type},
+        )
+        instance.delete()
+
+    @action(detail=True, methods=["get"], url_path="file")
+    def file(self, request, pk=None):
+        document = self.get_object()
+        path = get_project_document_file_path(document.storage_key)
+        if not path.exists():
+            return Response({"detail": "File not found."}, status=status.HTTP_404_NOT_FOUND)
+        filename = document.original_filename or f"document-{document.id}.{document.file_extension}"
+        return FileResponse(
+            path.open("rb"),
+            as_attachment=False,
+            filename=filename,
+            content_type=document.mime_type or "application/octet-stream",
+        )
 
 
 class AnnotationLayerViewSet(viewsets.ModelViewSet):

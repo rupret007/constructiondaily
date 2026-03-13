@@ -32,20 +32,22 @@ function buildWelcomeMessage(projectLabel: string, planSetName?: string | null):
     role: "assistant",
     status: "limited",
     content:
-      `Ask about ${scopeLabel}: takeoff counts, sheet coverage, calibration, AI runs, snapshots, and exports. ` +
-      "I will answer from live project data and call out when a question needs specs or other documents we do not ingest yet.",
+      `Ask about ${scopeLabel}: takeoff counts, sheet coverage, calibration, AI runs, snapshots, exports, and uploaded project documents. ` +
+      "I will answer from live project data and the documents that have been parsed into this project.",
     suggestedPrompts: planSetName
       ? [
           "How many pending takeoff items are on this plan set?",
           "Which sheets in this plan set are calibrated?",
           "What is the latest snapshot status for this plan set?",
           "What was the last export created for this plan set?",
+          "What do the uploaded project documents say about door hardware?",
         ]
       : [
           "List the plan sets for this project.",
           "How many takeoff items exist across this project?",
           "Which sheets are calibrated?",
           "What is the latest export created for this project?",
+          "What do the uploaded project documents say about door hardware?",
         ],
   };
 }

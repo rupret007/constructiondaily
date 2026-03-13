@@ -9,6 +9,7 @@ from .views import (
     PreconstructionCopilotViewSet,
     PlanSetViewSet,
     PlanSheetViewSet,
+    ProjectDocumentViewSet,
     RevisionSnapshotViewSet,
     TakeoffItemViewSet,
 )
@@ -17,6 +18,7 @@ router = DefaultRouter()
 router.register("copilot", PreconstructionCopilotViewSet, basename="preconstruction-copilot")
 router.register("sets", PlanSetViewSet, basename="plan-set")
 router.register("sheets", PlanSheetViewSet, basename="plan-sheet")
+router.register("documents", ProjectDocumentViewSet, basename="project-document")
 router.register("layers", AnnotationLayerViewSet, basename="annotation-layer")
 router.register("annotations", AnnotationItemViewSet, basename="annotation-item")
 router.register("takeoff", TakeoffItemViewSet, basename="takeoff-item")

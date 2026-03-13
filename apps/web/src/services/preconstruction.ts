@@ -9,6 +9,7 @@ import type {
   PlanSet,
   PlanSheetCadPreview,
   PlanSheet,
+  ProjectDocument,
   RevisionSnapshot,
   TakeoffItem,
   TakeoffSummary,
@@ -54,6 +55,46 @@ export async function deletePlanSet(planSetId: string): Promise<void> {
 export async function fetchPlanSheets(planSetId: string): Promise<PlanSheet[]> {
   const response = await apiRequest<PlanSheet[]>(`${P}/sheets/?plan_set=${planSetId}`);
   return Array.isArray(response) ? response : [];
+}
+
+export async function fetchProjectDocuments(
+  projectId: string,
+  options?: { planSetId?: string; scopedToPlanSet?: boolean }
+): Promise<ProjectDocument[]> {
+  const params = new URLSearchParams({ project: projectId });
+  if (options?.scopedToPlanSet && options.planSetId) {
+    params.set("scope_plan_set", options.planSetId);
+  } else if (options?.planSetId) {
+    params.set("plan_set", options.planSetId);
+  }
+  const response = await apiRequest<ProjectDocument[]>(`${P}/documents/?${params.toString()}`);
+  return Array.isArray(response) ? response : [];
+}
+
+export async function uploadProjectDocument(
+  projectId: string,
+  file: File,
+  options: {
+    document_type: ProjectDocument["document_type"];
+    title?: string;
+    plan_set?: string | null;
+  }
+): Promise<ProjectDocument> {
+  const form = new FormData();
+  form.append("project", projectId);
+  form.append("document_type", options.document_type);
+  form.append("file", file);
+  if (options.title) form.append("title", options.title);
+  if (options.plan_set) form.append("plan_set", options.plan_set);
+  return apiRequest<ProjectDocument>(`${P}/documents/`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function projectDocumentFileUrl(documentId: string): string {
+  const base = import.meta.env.VITE_API_BASE ?? "/api";
+  return `${base}${P}/documents/${documentId}/file/`;
 }
 
 export async function uploadPlanSheet(

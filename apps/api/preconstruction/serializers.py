@@ -18,6 +18,7 @@ from .models import (
     ExportRecord,
     PlanSet,
     PlanSheet,
+    ProjectDocument,
     RevisionSnapshot,
     TakeoffItem,
 )
@@ -124,6 +125,75 @@ class PlanSheetCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlanSheet
         fields = ("title", "sheet_number", "discipline", "sheet_index")
+
+
+class ProjectDocumentSerializer(serializers.ModelSerializer):
+    created_by = PreconstructionUserSlimSerializer(read_only=True)
+    updated_by = PreconstructionUserSlimSerializer(read_only=True)
+
+    class Meta:
+        model = ProjectDocument
+        fields = (
+            "id",
+            "project",
+            "plan_set",
+            "title",
+            "document_type",
+            "original_filename",
+            "storage_key",
+            "mime_type",
+            "file_extension",
+            "size_bytes",
+            "page_count",
+            "parse_status",
+            "parse_error",
+            "created_by",
+            "updated_by",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "original_filename",
+            "storage_key",
+            "mime_type",
+            "file_extension",
+            "size_bytes",
+            "page_count",
+            "parse_status",
+            "parse_error",
+            "created_at",
+            "updated_at",
+        )
+
+    def validate(self, attrs):
+        if self.instance:
+            if "project" in attrs and attrs["project"].id != self.instance.project_id:
+                raise serializers.ValidationError("Project cannot be changed after creation.")
+            if "plan_set" in attrs:
+                incoming_plan_set = attrs.get("plan_set")
+                incoming_plan_set_id = incoming_plan_set.id if incoming_plan_set else None
+                if incoming_plan_set_id != self.instance.plan_set_id:
+                    raise serializers.ValidationError("Plan set cannot be changed after creation.")
+
+        project = attrs.get("project") or getattr(self.instance, "project", None)
+        plan_set = attrs.get("plan_set") if "plan_set" in attrs else getattr(self.instance, "plan_set", None)
+        if project and plan_set and plan_set.project_id != project.id:
+            raise serializers.ValidationError("Plan set must belong to the selected project.")
+        return attrs
+
+
+class ProjectDocumentCreateSerializer(serializers.Serializer):
+    project = serializers.PrimaryKeyRelatedField(queryset=Project.objects.all())
+    plan_set = serializers.PrimaryKeyRelatedField(queryset=PlanSet.objects.all(), required=False, allow_null=True)
+    title = serializers.CharField(max_length=255, trim_whitespace=True, required=False, allow_blank=True)
+    document_type = serializers.ChoiceField(choices=ProjectDocument.DocumentType.choices)
+
+    def validate(self, attrs):
+        project = attrs["project"]
+        plan_set = attrs.get("plan_set")
+        if plan_set and plan_set.project_id != project.id:
+            raise serializers.ValidationError({"plan_set": "Plan set must belong to the selected project."})
+        return attrs
 
 
 class AnnotationLayerSerializer(serializers.ModelSerializer):

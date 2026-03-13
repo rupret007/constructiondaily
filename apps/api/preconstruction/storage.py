@@ -14,6 +14,12 @@ def _plans_dir() -> Path:
     return root
 
 
+def _project_documents_dir() -> Path:
+    root = Path(settings.MEDIA_ROOT) / "project_documents"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def store_plan_file(uploaded_file, project_id: str, plan_set_id: str, extension: str) -> str:
     """
     Store an uploaded plan file under plans/<project_id>/<plan_set_id>/<uuid>.<ext>.
@@ -31,4 +37,29 @@ def store_plan_file(uploaded_file, project_id: str, plan_set_id: str, extension:
 
 def get_plan_file_path(storage_key: str) -> Path:
     """Return full filesystem path for a storage_key."""
+    return Path(settings.MEDIA_ROOT) / storage_key
+
+
+def store_project_document_file(
+    uploaded_file,
+    project_id: str,
+    plan_set_id: str | None,
+    extension: str,
+) -> str:
+    """
+    Store an uploaded project document under project_documents/<project>/<scope>/<uuid>.<ext>.
+    Returns the storage_key relative to MEDIA_ROOT.
+    """
+    stored_name = f"{uuid.uuid4()}.{extension}"
+    scope = str(plan_set_id) if plan_set_id else "project"
+    folder = _project_documents_dir() / str(project_id) / scope
+    folder.mkdir(parents=True, exist_ok=True)
+    file_path = folder / stored_name
+    with file_path.open("wb") as destination:
+        for chunk in uploaded_file.chunks():
+            destination.write(chunk)
+    return str(file_path.relative_to(settings.MEDIA_ROOT))
+
+
+def get_project_document_file_path(storage_key: str) -> Path:
     return Path(settings.MEDIA_ROOT) / storage_key

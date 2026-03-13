@@ -2,6 +2,8 @@ from django.contrib import admin
 from .models import (
     PlanSet,
     PlanSheet,
+    ProjectDocument,
+    ProjectDocumentChunk,
     AnnotationLayer,
     AnnotationItem,
     TakeoffItem,
@@ -23,6 +25,20 @@ class PlanSetAdmin(admin.ModelAdmin):
 class PlanSheetAdmin(admin.ModelAdmin):
     list_display = ("title", "sheet_number", "plan_set", "parse_status", "created_at")
     list_filter = ("parse_status", "plan_set__project")
+
+
+@admin.register(ProjectDocument)
+class ProjectDocumentAdmin(admin.ModelAdmin):
+    list_display = ("title", "document_type", "project", "plan_set", "parse_status", "created_at")
+    list_filter = ("document_type", "parse_status", "project")
+    search_fields = ("title", "original_filename", "project__code")
+
+
+@admin.register(ProjectDocumentChunk)
+class ProjectDocumentChunkAdmin(admin.ModelAdmin):
+    list_display = ("document", "chunk_index", "page_number", "created_at")
+    list_filter = ("document__document_type", "document__project")
+    search_fields = ("document__title", "content")
 
 
 @admin.register(AnnotationLayer)

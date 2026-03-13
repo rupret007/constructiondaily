@@ -26,9 +26,11 @@ from .models import (
     ExportRecord,
     PlanSet,
     PlanSheet,
+    ProjectDocument,
     RevisionSnapshot,
     TakeoffItem,
 )
+from .document_services import search_project_documents
 from .filetypes import plan_file_type_from_storage_key
 from .providers.registry import get_provider
 
@@ -111,6 +113,19 @@ COPILOT_ANALYSIS_KEYWORDS = ("analysis", "analyze", "suggestion", "suggestions",
 COPILOT_SNAPSHOT_KEYWORDS = ("snapshot", "snapshots", "revision", "revisions", "lock", "locked", "compare", "changed", "difference")
 COPILOT_EXPORT_KEYWORDS = ("export", "exports", "csv", "json", "download")
 COPILOT_FILETYPE_KEYWORDS = ("cad", "pdf", "dwg", "dxf", "file type", "file types")
+COPILOT_DOCUMENT_INTENT_KEYWORDS = (
+    "called for",
+    "required",
+    "specified",
+    "specifies",
+    "per spec",
+    "per specs",
+    "manufacturer",
+    "model",
+    "finish",
+    "fire rating",
+    "package",
+)
 
 COPILOT_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     (
@@ -419,6 +434,7 @@ def _default_copilot_prompts(plan_set: PlanSet | None, plan_sheet: PlanSheet | N
             f"Is {sheet_name} calibrated for quantity takeoff?",
             f"What was the latest AI analysis run on {sheet_name}?",
             "What is the latest snapshot status for this plan set?",
+            "What do the uploaded project documents say about door hardware?",
         ]
     if plan_set is not None:
         return [
@@ -426,12 +442,14 @@ def _default_copilot_prompts(plan_set: PlanSet | None, plan_sheet: PlanSheet | N
             "Which sheets in this plan set are calibrated?",
             "What is the latest snapshot status for this plan set?",
             "What was the last export created for this plan set?",
+            "What do the uploaded project documents say about door hardware?",
         ]
     return [
         "List the plan sets for this project.",
         "How many takeoff items exist across this project?",
         "Which sheets are calibrated?",
         "What is the latest export created for this project?",
+        "What do the uploaded project documents say about door hardware?",
     ]
 
 
@@ -888,15 +906,16 @@ def _answer_copilot_help(project, plan_set: PlanSet | None, plan_sheet: PlanShee
     scope_label = _scope_label(project, plan_set, plan_sheet)
     answer = (
         f"I can answer grounded questions about {scope_label} using the live preconstruction record: "
-        "plan sets, sheets, takeoff totals, AI analysis runs, snapshots, and exports. "
-        "I do not ingest specs, addenda, RFIs, or submittals yet, so I will call that out instead of guessing."
+        "plan sets, sheets, takeoff totals, AI analysis runs, snapshots, exports, and any parsed project documents "
+        "uploaded for this project. If the needed document is not uploaded or did not parse, I will call that out "
+        "instead of guessing."
     )
     citations = [
         _build_copilot_citation(
             "project",
             str(project.id),
             f"{project.code} - {project.name}",
-            "Grounded scope includes plan sets, sheets, takeoff, AI runs, snapshots, and exports.",
+            "Grounded scope includes plan sets, sheets, takeoff, AI runs, snapshots, exports, and parsed project documents.",
         )
     ]
     if plan_set is not None:
@@ -930,20 +949,81 @@ def _answer_copilot_help(project, plan_set: PlanSet | None, plan_sheet: PlanShee
 def _answer_document_gap(project, plan_set: PlanSet | None, plan_sheet: PlanSheet | None) -> dict[str, Any]:
     scope_label = _scope_label(project, plan_set, plan_sheet)
     answer = (
-        f"I cannot answer that from {scope_label} yet because this copilot is not ingesting specs, addenda, RFIs, "
-        "submittals, or vendor documents. The right sources for that question would be the project spec book, "
-        "addenda log, RFI register, or submittal package once those documents are connected."
+        f"I cannot answer that from {scope_label} yet because I do not have parsed project documents in scope for "
+        "specs, addenda, RFIs, submittals, or vendor material. The right sources for that question would be the "
+        "project spec book, addenda log, RFI register, or submittal package once those documents are uploaded here."
     )
     citations = [
         _build_copilot_citation(
             "project",
             str(project.id),
             f"{project.code} - {project.name}",
-            "Current grounded scope excludes external project documents.",
+            "No parsed project documents are currently available in scope.",
         )
     ]
     return _build_copilot_result(
         status="needs_documents",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _answer_document_question(project, plan_set: PlanSet | None, plan_sheet: PlanSheet | None, question: str) -> dict[str, Any]:
+    scope_label = _scope_label(project, plan_set, plan_sheet)
+    search_result = search_project_documents(project=project, plan_set=plan_set, question=question, limit=3)
+    document_count = search_result["document_count"]
+    matches = search_result["matches"]
+
+    if document_count == 0:
+        return _answer_document_gap(project, plan_set, plan_sheet)
+
+    if not matches:
+        answer = (
+            f"I searched {document_count} parsed project document{'s' if document_count != 1 else ''} in "
+            f"{scope_label} but did not find a strong match for that question yet."
+        )
+        citations = [
+            _build_copilot_citation(
+                "document_search",
+                f"{project.id}:{plan_set.id if plan_set else 'all'}",
+                "Project document search",
+                f"Searched {document_count} parsed documents in scope with no strong match.",
+            )
+        ]
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
+    summary_parts: list[str] = []
+    citations: list[dict[str, str]] = []
+    for match in matches:
+        document: ProjectDocument = match["document"]
+        chunk = match["chunk"]
+        page_part = f", page {chunk.page_number}" if chunk.page_number else ""
+        summary_parts.append(
+            f"{document.title} ({_choice_label(ProjectDocument.DocumentType, document.document_type).lower()}{page_part}) "
+            f"looks relevant: {match['snippet']}"
+        )
+        citations.append(
+            _build_copilot_citation(
+                "document",
+                str(document.id),
+                document.title,
+                f"{_choice_label(ProjectDocument.DocumentType, document.document_type)}{page_part}: {match['snippet']}",
+            )
+        )
+
+    answer = f"I found relevant project-document evidence in {scope_label}. " + " ".join(summary_parts)
+    return _build_copilot_result(
+        status="grounded",
         answer=answer,
         project=project,
         plan_set=plan_set,
@@ -1525,11 +1605,11 @@ def answer_preconstruction_question(
     if plan_set is not None:
         scoped_exports = scoped_exports.filter(plan_set=plan_set)
 
-    if _contains_any(question_lower, COPILOT_DOCUMENT_KEYWORDS):
-        return _answer_document_gap(project, plan_set, plan_sheet)
+    if _contains_any(question_lower, COPILOT_DOCUMENT_KEYWORDS) or _contains_any(question_lower, COPILOT_DOCUMENT_INTENT_KEYWORDS):
+        return _answer_document_question(project, plan_set, plan_sheet, question_text)
     if _contains_any(question_lower, COPILOT_HELP_KEYWORDS):
         return _answer_copilot_help(project, plan_set, plan_sheet)
-    if _contains_any(question_lower, COPILOT_TAKEOFF_KEYWORDS) or _detect_requested_categories(question_lower):
+    if _contains_any(question_lower, COPILOT_TAKEOFF_KEYWORDS):
         return _answer_takeoff_question(project, scoped_takeoffs, plan_set, plan_sheet, question_lower)
     if _contains_any(question_lower, COPILOT_FILETYPE_KEYWORDS):
         return _answer_filetype_question(project, scoped_sheets, plan_set, plan_sheet)
@@ -1543,6 +1623,8 @@ def answer_preconstruction_question(
         return _answer_sheet_question(project, scoped_sheets, plan_set, plan_sheet, question_lower)
     if _contains_any(question_lower, COPILOT_PLAN_SET_KEYWORDS):
         return _answer_plan_set_question(project, scoped_plan_sets, plan_set, plan_sheet)
+    if _detect_requested_categories(question_lower):
+        return _answer_document_question(project, plan_set, plan_sheet, question_text)
     return _answer_general_summary(
         project,
         scoped_plan_sets,
