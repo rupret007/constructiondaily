@@ -216,9 +216,20 @@ function formatTokenLabel(value: string): string {
     .join(" ");
 }
 
+function matchesTakeoffWorkspaceFilters(
+  takeoff: Pick<TakeoffItem, "category" | "source" | "review_state">,
+  filters: { category: string; source: string; reviewState: string }
+): boolean {
+  if (filters.category !== "all" && takeoff.category !== filters.category) return false;
+  if (filters.source !== "all" && takeoff.source !== filters.source) return false;
+  if (filters.reviewState !== "all" && takeoff.review_state !== filters.reviewState) return false;
+  return true;
+}
+
 export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const takeoffWorkspaceRequestRef = useRef(0);
   const [sheet, setSheet] = useState<PlanSheet | null>(null);
   const [layers, setLayers] = useState<LayerType[]>([]);
   const [annotations, setAnnotations] = useState<AnnotationItem[]>([]);
@@ -327,7 +338,8 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     }
   }, [sheetId, planSetId]);
 
-  const loadTakeoffWorkspace = useCallback(async () => {
+  const loadTakeoffWorkspace = useCallback(async (preferredTakeoffId?: string | null) => {
+    const requestId = ++takeoffWorkspaceRequestRef.current;
     const filters = {
       ...(takeoffCategoryFilter !== "all" ? { category: takeoffCategoryFilter } : {}),
       ...(takeoffSourceFilter !== "all" ? { source: takeoffSourceFilter } : {}),
@@ -338,19 +350,44 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         fetchTakeoffItems(planSetId, sheetId, filters),
         fetchTakeoffSummary(planSetId, sheetId, filters),
       ]);
+      if (requestId !== takeoffWorkspaceRequestRef.current) return list;
       setTakeoffItems(list);
       setTakeoffSummary(summary);
       setSelectedTakeoffId((current) => {
-        if (current && list.some((item) => item.id === current)) return current;
+        const nextSelectedId = preferredTakeoffId ?? current;
+        if (nextSelectedId && list.some((item) => item.id === nextSelectedId)) return nextSelectedId;
         return list[0]?.id ?? null;
       });
+      return list;
     } catch (e) {
+      if (requestId !== takeoffWorkspaceRequestRef.current) return [];
       setTakeoffItems([]);
       setTakeoffSummary(null);
       setSelectedTakeoffId(null);
       setError(e instanceof Error ? e.message : "Failed to load takeoff workspace.");
+      return [];
     }
   }, [planSetId, sheetId, takeoffCategoryFilter, takeoffSourceFilter, takeoffReviewFilter]);
+
+  const focusTakeoffInWorkspace = useCallback(async (takeoff: Pick<TakeoffItem, "id" | "category" | "source" | "review_state">) => {
+    const matchesCurrentFilters = matchesTakeoffWorkspaceFilters(takeoff, {
+      category: takeoffCategoryFilter,
+      source: takeoffSourceFilter,
+      reviewState: takeoffReviewFilter,
+    });
+    if (matchesCurrentFilters) {
+      await loadTakeoffWorkspace(takeoff.id);
+      return;
+    }
+    setSelectedTakeoffId(takeoff.id);
+    setTakeoffCategoryFilter("all");
+    setTakeoffSourceFilter("all");
+    setTakeoffReviewFilter("all");
+  }, [loadTakeoffWorkspace, takeoffCategoryFilter, takeoffReviewFilter, takeoffSourceFilter]);
+
+  const refreshSheetAndWorkspace = useCallback(async () => {
+    await Promise.all([loadSheetAndData(), loadTakeoffWorkspace()]);
+  }, [loadSheetAndData, loadTakeoffWorkspace]);
 
   useEffect(() => {
     void loadSheetAndData();
@@ -712,7 +749,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     try {
       await deleteAnnotation(annotationId);
       setSelectedAnnotationId((id) => (id === annotationId ? null : id));
-      await loadSheetAndData();
+      await refreshSheetAndWorkspace();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete.");
     }
@@ -724,8 +761,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     setError("");
     try {
       const created = await createTakeoffFromAnnotation(annotation.id, annotationAssemblyProfile);
-      await loadTakeoffWorkspace();
-      setSelectedTakeoffId(created.primary_takeoff.id);
+      await focusTakeoffInWorkspace(created.primary_takeoff);
       const annList = await fetchAnnotations(sheetId);
       setAnnotations(annList);
     } catch (e) {
@@ -749,8 +785,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         quantity: addTakeoffQuantity,
       });
       setAddTakeoffQuantity("1");
-      await loadTakeoffWorkspace();
-      setSelectedTakeoffId(created.id);
+      await focusTakeoffInWorkspace(created);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add takeoff.");
     } finally {
@@ -763,7 +798,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     setCreating(true);
     setError("");
     try {
-      await updateTakeoffItem(selectedTakeoffId, {
+      const updated = await updateTakeoffItem(selectedTakeoffId, {
         category: editTakeoffCategory,
         subcategory: editTakeoffSubcategory,
         unit: editTakeoffUnit,
@@ -773,7 +808,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         review_state: editTakeoffReviewState,
         notes: editTakeoffNotes,
       });
-      await loadTakeoffWorkspace();
+      await focusTakeoffInWorkspace(updated);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save takeoff.");
     } finally {
@@ -903,10 +938,12 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   };
 
   const handleAcceptSuggestion = async (suggestionId: string) => {
+    setError("");
     try {
-      await acceptSuggestion(suggestionId);
+      const result = await acceptSuggestion(suggestionId);
       await loadSuggestions();
       await loadSheetAndData();
+      await focusTakeoffInWorkspace(result.takeoff);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to accept.");
     }
@@ -933,8 +970,9 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   };
 
   const handleAcceptWithEdits = async (suggestionId: string) => {
+    setError("");
     try {
-      await acceptSuggestion(suggestionId, {
+      const result = await acceptSuggestion(suggestionId, {
         label: editLabel,
         category: editCategory,
         unit: editUnit,
@@ -943,6 +981,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       setEditingSuggestionId(null);
       await loadSuggestions();
       await loadSheetAndData();
+      await focusTakeoffInWorkspace(result.takeoff);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to accept with edits.");
     }
@@ -955,7 +994,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       const result = await batchAcceptSuggestions(sheetId, 0.85);
       if (result.accepted_count > 0) {
         await loadSuggestions();
-        await loadSheetAndData();
+        await refreshSheetAndWorkspace();
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to batch accept.");
