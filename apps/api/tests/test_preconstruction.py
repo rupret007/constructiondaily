@@ -510,6 +510,17 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(data["extra_takeoffs"][0]["category"], "door_hardware")
         annotation.refresh_from_db()
         self.assertIsNotNone(annotation.linked_takeoff_item_id)
+        linked_rows = list(
+            TakeoffItem.objects.filter(plan_sheet=plan_sheet, source_annotation=annotation).order_by("category")
+        )
+        self.assertEqual(len(linked_rows), 2)
+
+        summary_resp = self.client.get(
+            "/api/preconstruction/takeoff/summary/",
+            {"plan_set": str(plan_set.id), "plan_sheet": str(plan_sheet.id)},
+        )
+        self.assertEqual(summary_resp.status_code, 200)
+        self.assertEqual(summary_resp.json()["linked_annotation_items"], 2)
 
     def test_annotation_create_takeoff_none_profile_generates_single_line(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -659,12 +670,12 @@ class PreconstructionAPITests(TestCase):
                 "plan_set": str(plan_set.id),
                 "category": "doors",
                 "unit": "count",
-                "quantity": "4",
+                "quantity": "1.2",
             },
             format="json",
         )
         self.assertEqual(create_resp.status_code, 201)
-        self.assertEqual(create_resp.json()["quantity"], "4.0000")
+        self.assertEqual(create_resp.json()["quantity"], "2.0000")
         self.assertGreaterEqual(
             AuditEvent.objects.filter(event_type="create_takeoff_item").count(),
             1,
@@ -677,6 +688,29 @@ class PreconstructionAPITests(TestCase):
             AuditEvent.objects.filter(event_type="delete_takeoff_item").count(),
             1,
         )
+
+    def test_takeoff_create_rejects_negative_quantity(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        create_resp = self.client.post(
+            "/api/preconstruction/takeoff/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "category": "doors",
+                "unit": "count",
+                "quantity": "-5",
+            },
+            format="json",
+        )
+        self.assertEqual(create_resp.status_code, 400)
+        self.assertIn("non-negative", str(create_resp.json()["quantity"][0]))
+        self.assertEqual(TakeoffItem.objects.filter(plan_set=plan_set).count(), 0)
 
     def test_takeoff_update_supports_estimator_review_fields(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -717,6 +751,31 @@ class PreconstructionAPITests(TestCase):
             AuditEvent.objects.filter(event_type="update_takeoff_item", object_id=str(takeoff.id)).count(),
             1,
         )
+
+    def test_takeoff_update_normalizes_count_quantity(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        takeoff = TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="2",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        patch_resp = self.client.patch(
+            f"/api/preconstruction/takeoff/{takeoff.id}/",
+            {"quantity": "2.2"},
+            format="json",
+        )
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertEqual(patch_resp.json()["quantity"], "3.0000")
 
     def test_takeoff_summary_returns_rollups_and_honors_filters(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -1309,6 +1368,13 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(data["takeoff"]["unit"], "count")
         self.assertEqual(float(data["takeoff"]["quantity"]), 2)
         self.assertEqual(data["annotation"]["label"], "Double door")
+        self.assertTrue(
+            TakeoffItem.objects.filter(
+                plan_sheet=plan_sheet,
+                category=TakeoffItem.Category.DOOR_HARDWARE,
+                source_annotation_id=data["annotation"]["id"],
+            ).exists()
+        )
         suggestion.refresh_from_db()
         self.assertEqual(suggestion.decision_state, AISuggestion.DecisionState.EDITED)
         self.assertGreaterEqual(

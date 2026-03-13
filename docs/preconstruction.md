@@ -55,12 +55,13 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - `linear_feet` from polyline/rectangle geometry when calibration exists
   - fallback to `1` when calibration or geometry is insufficient
 - Estimator-grade quantity normalization:
+  - applies to AI-generated rows and manual takeoff create/edit flows
   - configurable waste factors for linear/area units
   - configurable round-up steps for linear/area/cubic units
   - count/each quantities round up to whole units
 - Auto assembly expansion:
-  - accepted AI door suggestions create `doors` + `door_hardware` rows by default
-  - annotation package creation can output primary + extra rows
+  - accepted AI door suggestions create `doors` + `door_hardware` rows by default, including edited accepts that remain categorized as doors
+  - annotation package creation can output primary + extra rows, and generated rows keep source-annotation lineage for review rollups
 - Auto geometry-based quantity estimation when creating a takeoff package from a selected annotation.
 - Snapshot create + lock.
 - Export record creation with JSON/CSV payload responses.

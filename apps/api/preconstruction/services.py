@@ -306,15 +306,21 @@ def _normalize_estimator_quantity(quantity: Decimal, unit: str) -> Decimal:
 
 
 def _detect_assembly_profile(category: str, label: str | None) -> str | None:
-    label_lower = (label or "").strip().lower()
-    if category == TakeoffItem.Category.DOORS or re.search(r"\bdoor(s)?\b", label_lower):
+    if category == TakeoffItem.Category.DOORS:
         return ASSEMBLY_PROFILE_DOOR_SET
-    if category == TakeoffItem.Category.WINDOWS or re.search(r"\bwindow(s)?\b", label_lower):
+    if category == TakeoffItem.Category.WINDOWS:
         return ASSEMBLY_PROFILE_WINDOW_SET
-    if category == TakeoffItem.Category.PLUMBING_FIXTURES or re.search(
-        r"\b(toilet|lavatory|sink|fixture)\b",
-        label_lower,
-    ):
+    if category == TakeoffItem.Category.PLUMBING_FIXTURES:
+        return ASSEMBLY_PROFILE_FIXTURE_SET
+    if category != TakeoffItem.Category.CUSTOM:
+        return None
+
+    label_lower = (label or "").strip().lower()
+    if re.search(r"\bdoor(s)?\b", label_lower):
+        return ASSEMBLY_PROFILE_DOOR_SET
+    if re.search(r"\bwindow(s)?\b", label_lower):
+        return ASSEMBLY_PROFILE_WINDOW_SET
+    if re.search(r"\b(toilet|lavatory|sink|fixture)\b", label_lower):
         return ASSEMBLY_PROFILE_FIXTURE_SET
     return None
 
@@ -466,7 +472,7 @@ def accept_suggestion(
         if not isinstance(qty, Decimal):
             qty = Decimal(str(qty))
 
-        assembly_profile = ASSEMBLY_PROFILE_NONE if overrides_provided else ASSEMBLY_PROFILE_AUTO
+        assembly_profile = ASSEMBLY_PROFILE_AUTO
         components, resolved_profile = _expand_takeoff_components(
             category=category or TakeoffItem.Category.CUSTOM,
             unit=unit or TakeoffItem.Unit.COUNT,
@@ -488,6 +494,7 @@ def accept_suggestion(
                     project_id=plan_sheet.project_id,
                     plan_set=plan_set,
                     plan_sheet=plan_sheet,
+                    source_annotation=annotation,
                     category=component["category"],
                     unit=component["unit"],
                     quantity=component["quantity"],
@@ -603,6 +610,7 @@ def create_takeoff_from_annotation(
                     project_id=plan_sheet.project_id,
                     plan_set=plan_set,
                     plan_sheet=plan_sheet,
+                    source_annotation=annotation,
                     category=component["category"],
                     unit=component["unit"],
                     quantity=component["quantity"],
@@ -653,7 +661,10 @@ def build_takeoff_summary(queryset) -> dict[str, Any]:
         "manual_items": source_counts.get(TakeoffItem.Source.MANUAL, 0),
         "ai_assisted_items": source_counts.get(TakeoffItem.Source.AI_ASSISTED, 0),
         "linked_annotation_items": queryset.aggregate(
-            count=Count("id", filter=Q(linked_annotation__isnull=False))
+            count=Count(
+                "id",
+                filter=Q(source_annotation__isnull=False) | Q(linked_annotation__isnull=False),
+            )
         )["count"]
         or 0,
         "unit_totals": [

@@ -19,6 +19,7 @@ from .models import (
     RevisionSnapshot,
     TakeoffItem,
 )
+from .services import _normalize_estimator_quantity
 
 
 class PreconstructionUserSlimSerializer(serializers.ModelSerializer):
@@ -265,6 +266,16 @@ class TakeoffItemSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Plan sheet must belong to the selected project.")
             if plan_set and plan_sheet.plan_set_id != plan_set.id:
                 raise serializers.ValidationError("Plan sheet must belong to the selected plan set.")
+
+        normalize_quantity = self.instance is None or "quantity" in attrs or "unit" in attrs
+        if normalize_quantity:
+            quantity = attrs.get("quantity") if "quantity" in attrs else getattr(self.instance, "quantity", None)
+            unit = attrs.get("unit") if "unit" in attrs else getattr(self.instance, "unit", TakeoffItem.Unit.COUNT)
+            if quantity is not None:
+                try:
+                    attrs["quantity"] = _normalize_estimator_quantity(quantity, unit)
+                except ValueError as exc:
+                    raise serializers.ValidationError({"quantity": str(exc)})
         return attrs
 
 

@@ -237,6 +237,13 @@ class TakeoffItem(TimeStampedModel):
         blank=True,
         related_name="takeoff_items",
     )
+    source_annotation = models.ForeignKey(
+        AnnotationItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="generated_takeoff_items",
+    )
     category = models.CharField(max_length=64, choices=Category.choices, default=Category.CUSTOM)
     subcategory = models.CharField(max_length=128, blank=True)
     unit = models.CharField(max_length=32, choices=Unit.choices, default=Unit.COUNT)
