@@ -236,6 +236,18 @@ export type PreconstructionCopilotResponse = {
   };
   citations: PreconstructionCopilotCitation[];
   suggested_prompts: string[];
+  action_plan?: {
+    kind: string;
+    label: string;
+    detail: string;
+    prompt?: string;
+    export_type?: "json" | "csv";
+    annotation_id?: string;
+    assembly_profile?: string;
+    snapshot_name?: string;
+    provider_name?: "mock" | "openai_vision" | "cad_dxf" | "";
+    min_confidence?: number;
+  };
 };
 
 export type AIAnalysisRun = {

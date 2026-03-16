@@ -126,6 +126,34 @@ COPILOT_DOCUMENT_INTENT_KEYWORDS = (
     "fire rating",
     "package",
 )
+COPILOT_ACTION_ANALYSIS_KEYWORDS = (
+    "run analysis",
+    "analyze this sheet",
+    "look for",
+    "find all",
+    "identify",
+    "highlight",
+    "mark",
+    "shade",
+    "outline",
+)
+COPILOT_ACTION_BATCH_ACCEPT_KEYWORDS = (
+    "batch accept",
+    "accept all high-confidence",
+    "accept all high confidence",
+    "accept all pending suggestions",
+    "accept all suggestions",
+)
+COPILOT_ACTION_TAKEOFF_KEYWORDS = (
+    "create takeoff",
+    "create a takeoff",
+    "make takeoff",
+    "takeoff package",
+    "create takeoff package",
+)
+COPILOT_ACTION_SNAPSHOT_KEYWORDS = ("create snapshot", "save snapshot", "new snapshot")
+COPILOT_ACTION_EXPORT_CSV_KEYWORDS = ("export csv", "download csv", "csv export")
+COPILOT_ACTION_EXPORT_JSON_KEYWORDS = ("export json", "download json", "json export")
 
 COPILOT_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     (
@@ -474,14 +502,244 @@ def _build_copilot_result(
     plan_sheet: PlanSheet | None,
     citations: list[dict[str, str]],
     suggested_prompts: list[str] | None = None,
+    action_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "status": status,
         "answer": answer,
         "scope": _copilot_scope_payload(project, plan_set, plan_sheet),
         "citations": citations,
         "suggested_prompts": suggested_prompts or _default_copilot_prompts(plan_set, plan_sheet),
     }
+    if action_plan is not None:
+        payload["action_plan"] = action_plan
+    return payload
+
+
+def _build_action_plan(kind: str, label: str, detail: str, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "kind": kind,
+        "label": label,
+        "detail": detail,
+    }
+    payload.update({key: value for key, value in extra.items() if value is not None})
+    return payload
+
+
+def _action_requires_sheet_result(
+    *,
+    project,
+    plan_set: PlanSet | None,
+    plan_sheet: PlanSheet | None,
+    answer: str,
+) -> dict[str, Any]:
+    citations = [
+        _build_copilot_citation(
+            "project",
+            str(project.id),
+            f"{project.code} - {project.name}",
+            "Select a sheet before running sheet-level copilot actions.",
+        )
+    ]
+    return _build_copilot_result(
+        status="limited",
+        answer=answer,
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        citations=citations,
+    )
+
+
+def _maybe_build_action_plan_response(
+    *,
+    project,
+    plan_set: PlanSet | None,
+    plan_sheet: PlanSheet | None,
+    annotation: AnnotationItem | None,
+    suggestions,
+    question_text: str,
+    question_lower: str,
+    provider_name: str | None,
+) -> dict[str, Any] | None:
+    if plan_sheet is None and annotation is None:
+        return None
+
+    if _contains_any(question_lower, COPILOT_ACTION_TAKEOFF_KEYWORDS):
+        if annotation is None:
+            return _build_copilot_result(
+                status="limited",
+                answer="Select an annotation on the sheet first, then I can create a takeoff package from it.",
+                project=project,
+                plan_set=plan_set,
+                plan_sheet=plan_sheet,
+                citations=[
+                    _build_copilot_citation(
+                        "sheet",
+                        str(plan_sheet.id) if plan_sheet else str(project.id),
+                        _sheet_label(plan_sheet) if plan_sheet else f"{project.code} - {project.name}",
+                        "A selected annotation is required for takeoff-package actions.",
+                    )
+                ],
+            )
+        label = annotation.label or annotation.annotation_type
+        return _build_copilot_result(
+            status="grounded",
+            answer=f"I can create a takeoff package from annotation '{label}' on {_scope_label(project, plan_set, plan_sheet)}.",
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=[
+                _build_copilot_citation(
+                    "annotation",
+                    str(annotation.id),
+                    label,
+                    f"{annotation.annotation_type} annotation ready for takeoff package creation.",
+                )
+            ],
+            action_plan=_build_action_plan(
+                "create_takeoff_from_annotation",
+                "Create takeoff package",
+                "Create estimator takeoff rows from the currently selected annotation.",
+                annotation_id=str(annotation.id),
+                assembly_profile="auto",
+            ),
+        )
+
+    if _contains_any(question_lower, COPILOT_ACTION_BATCH_ACCEPT_KEYWORDS):
+        if plan_sheet is None:
+            return _action_requires_sheet_result(
+                project=project,
+                plan_set=plan_set,
+                plan_sheet=plan_sheet,
+                answer="Open a sheet first, then I can batch-accept high-confidence suggestions on that sheet.",
+            )
+        pending_count = suggestions.filter(decision_state=AISuggestion.DecisionState.PENDING).count()
+        answer = (
+            f"I can batch-accept pending suggestions on {_sheet_label(plan_sheet)} using the high-confidence threshold "
+            "of 85%."
+        )
+        return _build_copilot_result(
+            status="grounded",
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=[
+                _build_copilot_citation(
+                    "sheet",
+                    str(plan_sheet.id),
+                    _sheet_label(plan_sheet),
+                    f"{pending_count} pending suggestions currently exist on this sheet.",
+                )
+            ],
+            action_plan=_build_action_plan(
+                "batch_accept_suggestions",
+                "Accept high-confidence suggestions",
+                "Batch-accept all pending suggestions at or above 85% confidence for this sheet.",
+                min_confidence=0.85,
+            ),
+        )
+
+    export_type: str | None = None
+    if _contains_any(question_lower, COPILOT_ACTION_EXPORT_CSV_KEYWORDS):
+        export_type = ExportRecord.ExportType.CSV
+    elif _contains_any(question_lower, COPILOT_ACTION_EXPORT_JSON_KEYWORDS):
+        export_type = ExportRecord.ExportType.JSON
+    if export_type:
+        if plan_set is None:
+            return _action_requires_sheet_result(
+                project=project,
+                plan_set=plan_set,
+                plan_sheet=plan_sheet,
+                answer="Open a plan set first, then I can export its current takeoff package.",
+            )
+        return _build_copilot_result(
+            status="grounded",
+            answer=f"I can export {plan_set.name} as {export_type.upper()} from the current sheet context.",
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=[
+                _build_copilot_citation(
+                    "plan_set",
+                    str(plan_set.id),
+                    plan_set.name,
+                    f"Ready to export the current plan set as {export_type.upper()}.",
+                )
+            ],
+            action_plan=_build_action_plan(
+                "export_plan_set",
+                f"Export {export_type.upper()}",
+                f"Create a new {export_type.upper()} export for the current plan set.",
+                export_type=export_type,
+            ),
+        )
+
+    if _contains_any(question_lower, COPILOT_ACTION_SNAPSHOT_KEYWORDS):
+        if plan_set is None:
+            return _action_requires_sheet_result(
+                project=project,
+                plan_set=plan_set,
+                plan_sheet=plan_sheet,
+                answer="Open a plan set first, then I can create a revision snapshot for it.",
+            )
+        snapshot_name = f"Copilot Snapshot {timezone.localtime().strftime('%Y-%m-%d %H:%M')}"
+        return _build_copilot_result(
+            status="grounded",
+            answer=f"I can create a new revision snapshot for {plan_set.name}.",
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=[
+                _build_copilot_citation(
+                    "plan_set",
+                    str(plan_set.id),
+                    plan_set.name,
+                    "Snapshot will capture the current plan-set takeoff state.",
+                )
+            ],
+            action_plan=_build_action_plan(
+                "create_snapshot",
+                "Create revision snapshot",
+                "Save the current plan-set state as a new draft revision snapshot.",
+                snapshot_name=snapshot_name,
+            ),
+        )
+
+    if _contains_any(question_lower, COPILOT_ACTION_ANALYSIS_KEYWORDS):
+        if plan_sheet is None:
+            return _action_requires_sheet_result(
+                project=project,
+                plan_set=plan_set,
+                plan_sheet=plan_sheet,
+                answer="Open a sheet first, then I can run analysis on that sheet.",
+            )
+        prompt = question_text.strip()
+        return _build_copilot_result(
+            status="grounded",
+            answer=f"I can run analysis on {_sheet_label(plan_sheet)} using this prompt: {prompt}",
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=[
+                _build_copilot_citation(
+                    "sheet",
+                    str(plan_sheet.id),
+                    _sheet_label(plan_sheet),
+                    f"Ready to run a new analysis with provider {provider_name or 'current sheet viewer default'}.",
+                )
+            ],
+            action_plan=_build_action_plan(
+                "run_analysis",
+                "Run sheet analysis",
+                "Trigger a new AI analysis run on the current sheet.",
+                prompt=prompt,
+                provider_name=provider_name or "",
+            ),
+        )
+
+    return None
 
 
 def _detect_requested_categories(question_lower: str) -> list[str]:
@@ -1561,7 +1819,14 @@ def answer_preconstruction_question(
     question: str,
     plan_set: PlanSet | None = None,
     plan_sheet: PlanSheet | None = None,
+    annotation: AnnotationItem | None = None,
+    provider_name: str | None = None,
 ) -> dict[str, Any]:
+    if annotation is not None:
+        if plan_sheet is None:
+            plan_sheet = annotation.plan_sheet
+        if plan_set is None:
+            plan_set = annotation.plan_sheet.plan_set
     if plan_sheet is not None and plan_set is None:
         plan_set = plan_sheet.plan_set
 
@@ -1604,6 +1869,19 @@ def answer_preconstruction_question(
     scoped_exports = ExportRecord.objects.filter(project=project).select_related("revision_snapshot").order_by("-created_at")
     if plan_set is not None:
         scoped_exports = scoped_exports.filter(plan_set=plan_set)
+
+    action_response = _maybe_build_action_plan_response(
+        project=project,
+        plan_set=plan_set,
+        plan_sheet=plan_sheet,
+        annotation=annotation,
+        suggestions=scoped_suggestions,
+        question_text=question_text,
+        question_lower=question_lower,
+        provider_name=provider_name,
+    )
+    if action_response is not None:
+        return action_response
 
     if _contains_any(question_lower, COPILOT_DOCUMENT_KEYWORDS) or _contains_any(question_lower, COPILOT_DOCUMENT_INTENT_KEYWORDS):
         return _answer_document_question(project, plan_set, plan_sheet, question_text)

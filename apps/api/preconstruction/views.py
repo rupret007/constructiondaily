@@ -114,7 +114,9 @@ class PreconstructionCopilotViewSet(viewsets.GenericViewSet):
             project=project,
             plan_set=serializer.validated_data.get("plan_set"),
             plan_sheet=serializer.validated_data.get("plan_sheet"),
+            annotation=serializer.validated_data.get("annotation"),
             question=serializer.validated_data["question"],
+            provider_name=serializer.validated_data.get("provider_name"),
         )
         return Response(
             PreconstructionCopilotResponseSerializer(response_payload).data,

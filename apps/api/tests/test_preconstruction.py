@@ -2116,6 +2116,130 @@ class PreconstructionAPITests(TestCase):
         self.assertIn("pending", payload["answer"].lower())
         self.assertTrue(any(citation["kind"] == "takeoff_summary" for citation in payload["citations"]))
 
+    def test_preconstruction_copilot_returns_analysis_action_plan_for_sheet_command(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Bid Set Actions",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="Action Sheet",
+            sheet_number="A201",
+            storage_key="plans/test/a201.pdf",
+            created_by=self.user,
+        )
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "plan_sheet": str(plan_sheet.id),
+                "provider_name": "mock",
+                "question": "Find all doors on this sheet",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertEqual(payload["action_plan"]["kind"], "run_analysis")
+        self.assertEqual(payload["action_plan"]["provider_name"], "mock")
+        self.assertIn("find all doors", payload["action_plan"]["prompt"].lower())
+
+    def test_preconstruction_copilot_returns_takeoff_action_plan_for_selected_annotation(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Bid Set Actions",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="Action Sheet",
+            sheet_number="A202",
+            storage_key="plans/test/a202.pdf",
+            created_by=self.user,
+        )
+        layer = AnnotationLayer.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            name="Estimator",
+            category="general",
+            created_by=self.user,
+        )
+        annotation = AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=plan_sheet,
+            layer=layer,
+            annotation_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2},
+            label="Door group",
+            source="manual",
+            review_state="pending",
+            created_by=self.user,
+        )
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "plan_sheet": str(plan_sheet.id),
+                "annotation": str(annotation.id),
+                "question": "Create takeoff package from this annotation",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertEqual(payload["action_plan"]["kind"], "create_takeoff_from_annotation")
+        self.assertEqual(payload["action_plan"]["annotation_id"], str(annotation.id))
+
+    def test_preconstruction_copilot_requires_annotation_for_takeoff_action_plan(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Bid Set Actions",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="Action Sheet",
+            sheet_number="A203",
+            storage_key="plans/test/a203.pdf",
+            created_by=self.user,
+        )
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "plan_sheet": str(plan_sheet.id),
+                "question": "Create takeoff package from this annotation",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "limited")
+        self.assertNotIn("action_plan", payload)
+        self.assertIn("select an annotation", payload["answer"].lower())
+
     def test_preconstruction_copilot_flags_document_questions(self):
         self.client.login(username="estimator1", password="test-pass")
         resp = self.client.post(

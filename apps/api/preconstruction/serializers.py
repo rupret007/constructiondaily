@@ -355,12 +355,19 @@ class PreconstructionCopilotQuerySerializer(serializers.Serializer):
     project = serializers.PrimaryKeyRelatedField(queryset=Project.objects.all())
     plan_set = serializers.PrimaryKeyRelatedField(queryset=PlanSet.objects.all(), required=False, allow_null=True)
     plan_sheet = serializers.PrimaryKeyRelatedField(queryset=PlanSheet.objects.all(), required=False, allow_null=True)
+    annotation = serializers.PrimaryKeyRelatedField(queryset=AnnotationItem.objects.all(), required=False, allow_null=True)
+    provider_name = serializers.ChoiceField(
+        choices=(("mock", "Mock"), ("openai_vision", "OpenAI vision"), ("cad_dxf", "CAD DXF")),
+        required=False,
+        allow_null=True,
+    )
     question = serializers.CharField(max_length=2000, trim_whitespace=True)
 
     def validate(self, attrs):
         project = attrs["project"]
         plan_set = attrs.get("plan_set")
         plan_sheet = attrs.get("plan_sheet")
+        annotation = attrs.get("annotation")
 
         if not attrs.get("question", "").strip():
             raise serializers.ValidationError({"question": "This field may not be blank."})
@@ -368,8 +375,14 @@ class PreconstructionCopilotQuerySerializer(serializers.Serializer):
             raise serializers.ValidationError({"plan_set": "Plan set must belong to the selected project."})
         if plan_sheet and plan_sheet.project_id != project.id:
             raise serializers.ValidationError({"plan_sheet": "Plan sheet must belong to the selected project."})
+        if annotation and annotation.project_id != project.id:
+            raise serializers.ValidationError({"annotation": "Annotation must belong to the selected project."})
         if plan_set and plan_sheet and plan_sheet.plan_set_id != plan_set.id:
             raise serializers.ValidationError({"plan_sheet": "Plan sheet must belong to the selected plan set."})
+        if annotation and plan_sheet and annotation.plan_sheet_id != plan_sheet.id:
+            raise serializers.ValidationError({"annotation": "Annotation must belong to the selected sheet."})
+        if annotation and plan_set and annotation.plan_sheet.plan_set_id != plan_set.id:
+            raise serializers.ValidationError({"annotation": "Annotation must belong to the selected plan set."})
         return attrs
 
 
@@ -390,12 +403,26 @@ class PreconstructionCopilotScopeSerializer(serializers.Serializer):
     plan_sheet_name = serializers.CharField(allow_blank=True, allow_null=True)
 
 
+class PreconstructionCopilotActionPlanSerializer(serializers.Serializer):
+    kind = serializers.CharField()
+    label = serializers.CharField()
+    detail = serializers.CharField()
+    prompt = serializers.CharField(required=False)
+    export_type = serializers.CharField(required=False)
+    annotation_id = serializers.CharField(required=False)
+    assembly_profile = serializers.CharField(required=False)
+    snapshot_name = serializers.CharField(required=False)
+    provider_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    min_confidence = serializers.FloatField(required=False)
+
+
 class PreconstructionCopilotResponseSerializer(serializers.Serializer):
     status = serializers.CharField()
     answer = serializers.CharField()
     scope = PreconstructionCopilotScopeSerializer()
     citations = PreconstructionCopilotCitationSerializer(many=True)
     suggested_prompts = serializers.ListField(child=serializers.CharField(), required=False)
+    action_plan = PreconstructionCopilotActionPlanSerializer(required=False)
 
 
 class AIAnalysisRunSerializer(serializers.ModelSerializer):

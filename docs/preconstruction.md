@@ -22,10 +22,16 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 9. Create takeoff items manually or from selected annotations (single-line or assembly package mode).
 10. Review takeoff rollups, filter the workspace, and edit quantity/cost code/bid package/review state as needed.
 11. Run AI analysis, then accept/reject/edit suggestions.
-12. Choose analysis provider per run (`mock`, `openai_vision` for PDF, or `cad_dxf` for DXF/DWG).
-13. Batch-accept high-confidence suggestions (default threshold 85%).
-14. Create snapshots and lock when final.
-15. Export JSON or CSV.
+12. Use the sheet-level copilot to type commands such as:
+    - run analysis on the current sheet
+    - batch-accept high-confidence suggestions
+    - create a takeoff package from the selected annotation
+    - create a snapshot
+    - export CSV or JSON
+13. Choose analysis provider per run (`mock`, `openai_vision` for PDF, or `cad_dxf` for DXF/DWG).
+14. Batch-accept high-confidence suggestions (default threshold 85%).
+15. Create snapshots and lock when final.
+16. Export JSON or CSV.
 
 ## Current capabilities
 
@@ -72,6 +78,11 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - routes category/review shorthand questions such as pending doors into takeoff summaries instead of document search
   - retrieval now favors selected-plan-set docs, matching document types, and newer relevant sources before generic fallback matches
   - explicitly reports when a needed spec, RFI, addendum, submittal, or vendor doc is not uploaded or did not parse yet
+- Sheet copilot inside the viewer:
+  - understands typed action commands in sheet context
+  - returns a structured action plan before execution
+  - can run analysis, batch-accept suggestions, create takeoff packages from the selected annotation, create snapshots, and export CSV/JSON
+  - reuses the existing audited API flows instead of mutating client state directly
 - Estimator-grade quantity normalization:
   - applies to AI-generated rows and manual takeoff create/edit flows
   - configurable waste factors for linear/area units
@@ -142,6 +153,7 @@ Base path: `/api/preconstruction/`
 - `takeoff/`: takeoff CRUD
 - `takeoff/summary/`: filtered takeoff rollups for estimator review workspace
 - `copilot/query/`: typed grounded Q&A over current preconstruction records
+  - optional sheet-viewer action plans are also returned here when the request includes sheet context and an actionable command
 - `analysis/`: trigger/list AI analysis runs
 - `suggestions/`: list suggestions + accept/reject + batch_accept
 - `snapshots/`: create/list snapshots + lock

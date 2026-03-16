@@ -289,6 +289,8 @@ export async function queryPreconstructionCopilot(payload: {
   project: string;
   plan_set?: string | null;
   plan_sheet?: string | null;
+  annotation?: string | null;
+  provider_name?: "mock" | "openai_vision" | "cad_dxf" | null;
   question: string;
 }): Promise<PreconstructionCopilotResponse> {
   return apiRequest<PreconstructionCopilotResponse>(`${P}/copilot/query/`, {

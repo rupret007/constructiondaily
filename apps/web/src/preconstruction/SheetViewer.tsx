@@ -8,6 +8,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
+import { SheetCopilotPanel } from "./SheetCopilotPanel";
 import {
   acceptSuggestion,
   batchAcceptSuggestions,
@@ -755,12 +756,15 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     }
   };
 
-  const handleCreateTakeoffFromAnnotation = async (annotation: AnnotationItem) => {
+  const handleCreateTakeoffFromAnnotation = async (
+    annotation: AnnotationItem,
+    assemblyProfile = annotationAssemblyProfile
+  ) => {
     if (!sheet) return;
     setCreating(true);
     setError("");
     try {
-      const created = await createTakeoffFromAnnotation(annotation.id, annotationAssemblyProfile);
+      const created = await createTakeoffFromAnnotation(annotation.id, assemblyProfile);
       await focusTakeoffInWorkspace(created.primary_takeoff);
       const annList = await fetchAnnotations(sheetId);
       setAnnotations(annList);
@@ -791,6 +795,17 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleCreateTakeoffFromAnnotationById = async (
+    annotationId: string,
+    assemblyProfile: "auto" | "none" | "door_set" | "window_set" | "fixture_set"
+  ) => {
+    const annotation = annotations.find((item) => item.id === annotationId);
+    if (!annotation) {
+      throw new Error("Select a valid annotation before creating a takeoff package.");
+    }
+    await handleCreateTakeoffFromAnnotation(annotation, assemblyProfile);
   };
 
   const handleSaveTakeoff = async () => {
@@ -915,19 +930,26 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     }
   };
 
-  const handleRunAnalysis = async () => {
-    if ((sheet?.file_type === "dxf" || sheet?.file_type === "dwg") && analysisProvider === "openai_vision") {
+  const handleRunAnalysis = async (promptOverride?: string, providerOverride?: AnalysisProvider) => {
+    const nextPrompt = (promptOverride ?? aiPrompt).trim();
+    const nextProvider = providerOverride ?? analysisProvider;
+    if (!nextPrompt) {
+      setError("Provide an analysis prompt first.");
+      return;
+    }
+    if ((sheet?.file_type === "dxf" || sheet?.file_type === "dwg") && nextProvider === "openai_vision") {
       setError("OpenAI vision analysis currently supports PDF plan sheets only.");
       return;
     }
-    if (sheet?.file_type === "pdf" && analysisProvider === "cad_dxf") {
+    if (sheet?.file_type === "pdf" && nextProvider === "cad_dxf") {
       setError("CAD analysis requires a DXF or DWG plan sheet.");
       return;
     }
     setAiRunning(true);
     setError("");
     try {
-      await triggerAnalysis(sheetId, aiPrompt, analysisProvider);
+      setAiPrompt(nextPrompt);
+      await triggerAnalysis(sheetId, nextPrompt, nextProvider);
       await loadSuggestions();
       await loadSheetAndData();
     } catch (e) {
@@ -1003,11 +1025,15 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     }
   };
 
-  const handleCreateSnapshot = async () => {
+  const handleCreateSnapshot = async (nameOverride?: string) => {
     if (!sheet) return;
     setCreating(true);
     try {
-      await createSnapshot({ project: sheet.project, plan_set: planSetId, name: `Snapshot ${new Date().toISOString().slice(0, 10)}` });
+      await createSnapshot({
+        project: sheet.project,
+        plan_set: planSetId,
+        name: nameOverride || `Snapshot ${new Date().toISOString().slice(0, 10)}`,
+      });
       await loadSnapshotsAndExports();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create snapshot.");
@@ -1038,6 +1064,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       setCreating(false);
     }
   };
+  const selectedAnnotation = annotations.find((item) => item.id === selectedAnnotationId) ?? null;
 
   const drawCadReference = useCallback((ctx: CanvasRenderingContext2D, pw: number, ph: number) => {
     cadPreviewItems.forEach((item) => {
@@ -1729,6 +1756,25 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           )}
         </div>
       </div>
+
+      {sheet ? (
+        <div className="row sheet-viewer-sidebars">
+          <SheetCopilotPanel
+            projectId={sheet.project}
+            planSetId={planSetId}
+            sheetId={sheetId}
+            sheetLabel={sheet.title || sheet.sheet_number || "Current sheet"}
+            selectedAnnotationId={selectedAnnotation?.id ?? null}
+            selectedAnnotationLabel={selectedAnnotation?.label ?? null}
+            analysisProvider={analysisProvider}
+            onRunAnalysis={handleRunAnalysis}
+            onBatchAccept={handleBatchAccept}
+            onCreateTakeoffFromAnnotation={handleCreateTakeoffFromAnnotationById}
+            onCreateSnapshot={handleCreateSnapshot}
+            onExport={handleExport}
+          />
+        </div>
+      ) : null}
 
       <hr style={{ margin: "1.5rem 0" }} />
       <h4>AI suggestion review</h4>
