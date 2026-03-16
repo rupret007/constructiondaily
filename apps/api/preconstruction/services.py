@@ -1619,12 +1619,12 @@ def answer_preconstruction_question(
         return _answer_export_question(project, scoped_exports, plan_set, plan_sheet)
     if _contains_any(question_lower, COPILOT_ANALYSIS_KEYWORDS):
         return _answer_analysis_question(project, scoped_runs, scoped_suggestions, plan_set, plan_sheet)
+    if _detect_requested_categories(question_lower):
+        return _answer_takeoff_question(project, scoped_takeoffs, plan_set, plan_sheet, question_lower)
     if _contains_any(question_lower, COPILOT_SHEET_KEYWORDS):
         return _answer_sheet_question(project, scoped_sheets, plan_set, plan_sheet, question_lower)
     if _contains_any(question_lower, COPILOT_PLAN_SET_KEYWORDS):
         return _answer_plan_set_question(project, scoped_plan_sets, plan_set, plan_sheet)
-    if _detect_requested_categories(question_lower):
-        return _answer_document_question(project, plan_set, plan_sheet, question_text)
     return _answer_general_summary(
         project,
         scoped_plan_sets,

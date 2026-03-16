@@ -9,7 +9,11 @@ from django.db import transaction
 from django.db.models import Q
 
 from .models import PlanSet, ProjectDocument, ProjectDocumentChunk
-from .storage import get_project_document_file_path
+from .storage import (
+    get_project_document_file_path,
+    promote_project_document_to_safe,
+    quarantine_project_document_file,
+)
 
 STOPWORDS = {
     "about",
@@ -55,30 +59,22 @@ def process_project_document(document: ProjectDocument) -> ProjectDocument:
         extracted_text, page_count, chunks = _extract_project_document_content(document)
         if not extracted_text.strip():
             raise RuntimeError("No extractable text was found in this document.")
-    except RuntimeError as exc:
-        document.page_count = 0
-        document.extracted_text = ""
-        document.parse_status = ProjectDocument.ParseStatus.FAILED
-        document.parse_error = str(exc)
-        document.save(
-            update_fields=[
-                "page_count",
-                "extracted_text",
-                "parse_status",
-                "parse_error",
-                "updated_at",
-            ]
-        )
-        document.chunks.all().delete()
-        return document
+    except Exception as exc:  # noqa: BLE001 - parser/runtime failures should stay user-visible, not 500
+        return _mark_project_document_failed(document, exc)
 
     with transaction.atomic():
+        document.storage_key = promote_project_document_to_safe(
+            document.storage_key,
+            str(document.project_id),
+            str(document.plan_set_id) if document.plan_set_id else None,
+        )
         document.page_count = page_count
         document.extracted_text = extracted_text
         document.parse_status = ProjectDocument.ParseStatus.PARSED
         document.parse_error = ""
         document.save(
             update_fields=[
+                "storage_key",
                 "page_count",
                 "extracted_text",
                 "parse_status",
@@ -148,11 +144,43 @@ def search_project_documents(
     matches.sort(
         key=lambda item: (
             -item["score"],
-            item["document"].created_at,
+            -_created_at_sort_value(item["document"]),
             item["chunk"].chunk_index,
         )
     )
     return {"document_count": len(document_list), "matches": matches[:limit]}
+
+
+def _mark_project_document_failed(document: ProjectDocument, exc: Exception) -> ProjectDocument:
+    parse_error = str(exc).strip() or "Project document parsing failed."
+    document.storage_key = quarantine_project_document_file(
+        document.storage_key,
+        str(document.project_id),
+        str(document.plan_set_id) if document.plan_set_id else None,
+    )
+    document.page_count = 0
+    document.extracted_text = ""
+    document.parse_status = ProjectDocument.ParseStatus.FAILED
+    document.parse_error = parse_error
+    document.save(
+        update_fields=[
+            "storage_key",
+            "page_count",
+            "extracted_text",
+            "parse_status",
+            "parse_error",
+            "updated_at",
+        ]
+    )
+    document.chunks.all().delete()
+    return document
+
+
+def _created_at_sort_value(document: ProjectDocument) -> float:
+    created_at = getattr(document, "created_at", None)
+    if created_at is None:
+        return 0.0
+    return created_at.timestamp()
 
 
 def _extract_project_document_content(document: ProjectDocument) -> tuple[str, int, list[dict[str, Any]]]:
@@ -180,11 +208,14 @@ def _extract_pdf_pages(path) -> list[dict[str, Any]]:
         raise RuntimeError("PyMuPDF is required to parse PDF project documents.") from exc
 
     pages: list[dict[str, Any]] = []
-    with fitz.open(path) as pdf:
-        for page_number in range(pdf.page_count):
-            page = pdf.load_page(page_number)
-            text = _normalize_whitespace(page.get_text("text"))
-            pages.append({"page_number": page_number + 1, "content": text})
+    try:
+        with fitz.open(path) as pdf:
+            for page_number in range(pdf.page_count):
+                page = pdf.load_page(page_number)
+                text = _normalize_whitespace(page.get_text("text"))
+                pages.append({"page_number": page_number + 1, "content": text})
+    except Exception as exc:  # noqa: BLE001 - PyMuPDF raises parser-specific exceptions
+        raise RuntimeError(f"PDF project document could not be parsed: {exc}") from exc
     return pages
 
 

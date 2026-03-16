@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
+from django.utils import timezone
 from reportlab.pdfgen import canvas
 from rest_framework.test import APIClient
 
@@ -21,6 +23,7 @@ from preconstruction.models import (
     PlanSet,
     PlanSheet,
     ProjectDocument,
+    ProjectDocumentChunk,
     RevisionSnapshot,
     TakeoffItem,
 )
@@ -32,6 +35,7 @@ from preconstruction.services import (
     run_plan_analysis,
 )
 from preconstruction.providers.registry import get_provider
+from preconstruction.storage import get_project_document_file_path
 
 
 # Minimal valid PDF bytes (single page)
@@ -2244,6 +2248,86 @@ class PreconstructionAPITests(TestCase):
             1,
         )
 
+    def test_project_document_upload_promotes_safe_file_and_serves_download(self):
+        self.client.login(username="estimator1", password="test-pass")
+        pdf = BytesIO(build_pdf_with_text("Door hardware spec.", "Use BH-3 at rated openings."))
+        pdf.name = "hardware-spec.pdf"
+
+        resp = self.client.post(
+            "/api/preconstruction/documents/",
+            {
+                "project": str(self.project.id),
+                "title": "Hardware Spec",
+                "document_type": "spec",
+                "file": pdf,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        document = ProjectDocument.objects.get(id=resp.json()["id"])
+        self.assertEqual(document.parse_status, ProjectDocument.ParseStatus.PARSED)
+        self.assertIn("/safe/", document.storage_key.replace("\\", "/"))
+        self.assertTrue(get_project_document_file_path(document.storage_key).exists())
+
+        file_resp = self.client.get(f"/api/preconstruction/documents/{document.id}/file/")
+        self.assertEqual(file_resp.status_code, 200)
+        self.assertIn("attachment;", file_resp.get("Content-Disposition", ""))
+
+    @patch("preconstruction.document_services._extract_pdf_pages", side_effect=ValueError("synthetic parser failure"))
+    def test_project_document_upload_parser_failure_is_quarantined(self, _extract_pdf_pages):
+        self.client.login(username="estimator1", password="test-pass")
+        pdf = BytesIO(MINIMAL_PDF)
+        pdf.name = "broken-spec.pdf"
+
+        resp = self.client.post(
+            "/api/preconstruction/documents/",
+            {
+                "project": str(self.project.id),
+                "title": "Broken Spec",
+                "document_type": "spec",
+                "file": pdf,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        payload = resp.json()
+        self.assertEqual(payload["parse_status"], ProjectDocument.ParseStatus.FAILED)
+        self.assertIn("synthetic parser failure", payload["parse_error"])
+        document = ProjectDocument.objects.get(id=payload["id"])
+        self.assertIn("/quarantine/", document.storage_key.replace("\\", "/"))
+        self.assertTrue(get_project_document_file_path(document.storage_key).exists())
+
+        file_resp = self.client.get(f"/api/preconstruction/documents/{document.id}/file/")
+        self.assertEqual(file_resp.status_code, 409)
+
+    def test_project_document_delete_removes_stored_file(self):
+        self.client.login(username="estimator1", password="test-pass")
+        pdf = BytesIO(build_pdf_with_text("Delete me."))
+        pdf.name = "delete-me.pdf"
+
+        create_resp = self.client.post(
+            "/api/preconstruction/documents/",
+            {
+                "project": str(self.project.id),
+                "title": "Delete Me",
+                "document_type": "other",
+                "file": pdf,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(create_resp.status_code, 201)
+        document = ProjectDocument.objects.get(id=create_resp.json()["id"])
+        path = get_project_document_file_path(document.storage_key)
+        self.assertTrue(path.exists())
+
+        delete_resp = self.client.delete(f"/api/preconstruction/documents/{document.id}/")
+        self.assertEqual(delete_resp.status_code, 204)
+        self.assertFalse(ProjectDocument.objects.filter(id=document.id).exists())
+        self.assertFalse(path.exists())
+
     def test_project_document_copilot_answers_from_uploaded_documents(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(
@@ -2289,6 +2373,70 @@ class PreconstructionAPITests(TestCase):
         self.assertIn("bh-1", payload["answer"].lower())
         self.assertTrue(any(citation["kind"] == "document" for citation in payload["citations"]))
 
+    def test_project_document_copilot_prefers_newer_matching_documents(self):
+        self.client.login(username="estimator1", password="test-pass")
+        older_doc = ProjectDocument.objects.create(
+            project=self.project,
+            title="Door Notes 1",
+            document_type=ProjectDocument.DocumentType.SPEC,
+            original_filename="older.txt",
+            storage_key="project_documents/mock/project/safe/older.txt",
+            mime_type="text/plain",
+            file_extension="txt",
+            size_bytes=32,
+            page_count=1,
+            extracted_text="Rated openings use hardware set BH-OLD.",
+            parse_status=ProjectDocument.ParseStatus.PARSED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        ProjectDocumentChunk.objects.create(
+            document=older_doc,
+            chunk_index=0,
+            page_number=1,
+            content="Rated openings use hardware set BH-OLD.",
+        )
+        ProjectDocument.objects.filter(id=older_doc.id).update(created_at=timezone.now() - timedelta(days=2))
+
+        newer_doc = ProjectDocument.objects.create(
+            project=self.project,
+            title="Door Notes 2",
+            document_type=ProjectDocument.DocumentType.ADDENDUM,
+            original_filename="newer.txt",
+            storage_key="project_documents/mock/project/safe/newer.txt",
+            mime_type="text/plain",
+            file_extension="txt",
+            size_bytes=32,
+            page_count=1,
+            extracted_text="Rated openings use hardware set BH-NEW.",
+            parse_status=ProjectDocument.ParseStatus.PARSED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        ProjectDocumentChunk.objects.create(
+            document=newer_doc,
+            chunk_index=0,
+            page_number=1,
+            content="Rated openings use hardware set BH-NEW.",
+        )
+        ProjectDocument.objects.filter(id=newer_doc.id).update(created_at=timezone.now() - timedelta(days=1))
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "question": "What does the spec say about rated openings?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertGreaterEqual(len(payload["citations"]), 2)
+        self.assertEqual(payload["citations"][0]["label"], "Door Notes 2")
+        self.assertIn("bh-new", payload["answer"].lower())
+
     def test_project_document_scope_includes_project_wide_docs_for_plan_set_queries(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(
@@ -2330,6 +2478,51 @@ class PreconstructionAPITests(TestCase):
         payload = resp.json()
         self.assertEqual(payload["status"], "grounded")
         self.assertIn("thermally broken", payload["answer"].lower())
+
+    def test_preconstruction_copilot_routes_category_review_questions_to_takeoff_summary(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Bid Set Doors",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="4",
+            review_state=TakeoffItem.ReviewState.PENDING,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="2",
+            review_state=TakeoffItem.ReviewState.ACCEPTED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "question": "Are there pending doors on this plan set?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertIn("pending", payload["answer"].lower())
+        self.assertTrue(any(citation["kind"] == "takeoff_summary" for citation in payload["citations"]))
 
     def test_preconstruction_requires_auth(self):
         plan_set = PlanSet.objects.create(

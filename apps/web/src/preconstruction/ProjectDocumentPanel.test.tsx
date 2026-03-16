@@ -119,4 +119,31 @@ describe("ProjectDocumentPanel", () => {
     );
     expect(await screen.findByText("RFI 12")).toBeInTheDocument();
   });
+
+  it("disables downloads for documents that did not parse", async () => {
+    fetchProjectDocuments.mockResolvedValue([
+      {
+        id: "doc-3",
+        project: "project-1",
+        plan_set: null,
+        title: "Broken Spec",
+        document_type: "spec",
+        original_filename: "broken-spec.pdf",
+        storage_key: "project_documents/project-1/project/quarantine/broken-spec.pdf",
+        mime_type: "application/pdf",
+        file_extension: "pdf",
+        size_bytes: 512,
+        page_count: 0,
+        parse_status: "failed",
+        parse_error: "Synthetic parser failure",
+        created_at: "2026-03-13T12:00:00Z",
+        updated_at: "2026-03-13T12:00:00Z",
+      },
+    ]);
+
+    render(<ProjectDocumentPanel projectId="project-1" />);
+
+    expect(await screen.findByText("Broken Spec")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /unavailable/i })).toBeDisabled();
+  });
 });

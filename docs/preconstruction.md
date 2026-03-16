@@ -14,7 +14,7 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 1. Open **Preconstruction** and choose a project.
 2. Create a plan set.
 3. Upload one or more plan files (`.pdf`, `.dxf`, or `.dwg`) to the selected plan set.
-4. Upload supporting project documents (`.pdf`, `.txt`, `.md`) as project-wide documents or scoped to the selected plan set.
+4. Upload supporting project documents (`.pdf`, `.txt`, `.md`) as project-wide documents or scoped to the selected plan set. Parsed files become downloadable; failed parses are quarantined and remain unavailable for download.
 5. Use the typed **Estimator Copilot** on the dashboard to ask grounded questions about the selected project or plan set.
 6. Open a sheet in the viewer.
 7. Create point/rectangle/polygon/polyline annotations directly on the canvas.
@@ -36,6 +36,7 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - `txt`
   - `md`
   - optional plan-set scoping on top of project-wide docs
+  - raw upload staging with safe promotion on successful parse and quarantine on parse failure
 - Layer visibility toggles.
 - Annotation inspector with delete and "create takeoff package" actions.
 - Takeoff review workspace with:
@@ -67,6 +68,7 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - returns grounded citations for the records it used
   - scopes answers to the selected project and optional selected plan set
   - includes project-wide docs plus plan-set-scoped docs when a plan set is selected
+  - routes category/review shorthand questions such as pending doors into takeoff summaries instead of document search
   - explicitly reports when a needed spec, RFI, addendum, submittal, or vendor doc is not uploaded or did not parse yet
 - Estimator-grade quantity normalization:
   - applies to AI-generated rows and manual takeoff create/edit flows
@@ -125,7 +127,7 @@ Base path: `/api/preconstruction/`
 - `sheets/{id}/file/`: serve uploaded sheet file (PDF/DXF/DWG)
 - `sheets/{id}/cad_preview/`: normalized CAD entity geometry for DXF/DWG canvas preview
 - `documents/`: upload/list/retrieve/delete project documents
-- `documents/{id}/file/`: serve uploaded project document file
+- `documents/{id}/file/`: download a parsed project document file (failed/unparsed docs return conflict instead of raw file access)
 - `layers/`: annotation layers
 - `annotations/`: annotation CRUD
 - `annotations/{id}/create_takeoff/`: create takeoff package from one annotation (`assembly_profile` supported)

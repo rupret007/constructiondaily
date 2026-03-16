@@ -67,6 +67,7 @@ from .filetypes import (
     plan_file_type_from_storage_key,
 )
 from .storage import (
+    delete_project_document_file,
     get_plan_file_path,
     get_project_document_file_path,
     store_plan_file,
@@ -377,6 +378,7 @@ class ProjectDocumentViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         if not user_has_project_role(self.request.user, str(instance.project_id), PROJECT_WRITE_ROLES):
             raise PermissionDenied("Insufficient permissions.")
+        storage_key = instance.storage_key
         record_audit_event(
             actor=self.request.user,
             event_type="delete_project_document",
@@ -386,17 +388,23 @@ class ProjectDocumentViewSet(viewsets.ModelViewSet):
             metadata={"document_type": instance.document_type},
         )
         instance.delete()
+        delete_project_document_file(storage_key)
 
     @action(detail=True, methods=["get"], url_path="file")
     def file(self, request, pk=None):
         document = self.get_object()
+        if document.parse_status != ProjectDocument.ParseStatus.PARSED:
+            return Response(
+                {"detail": "Only parsed project documents are available for download."},
+                status=status.HTTP_409_CONFLICT,
+            )
         path = get_project_document_file_path(document.storage_key)
         if not path.exists():
             return Response({"detail": "File not found."}, status=status.HTTP_404_NOT_FOUND)
         filename = document.original_filename or f"document-{document.id}.{document.file_extension}"
         return FileResponse(
             path.open("rb"),
-            as_attachment=False,
+            as_attachment=True,
             filename=filename,
             content_type=document.mime_type or "application/octet-stream",
         )

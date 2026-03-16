@@ -183,9 +183,10 @@ export function ProjectDocumentPanel({ projectId, planSetId, planSetName }: Prop
                     type="button"
                     variant="outline"
                     size="sm"
+                    disabled={document.parse_status !== "parsed"}
                     onClick={() => window.open(projectDocumentFileUrl(document.id), "_blank", "noopener,noreferrer")}
                   >
-                    Open
+                    {document.parse_status === "parsed" ? "Download" : "Unavailable"}
                   </Button>
                 </div>
               );
