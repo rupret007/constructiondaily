@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SheetCopilotPanel } from "./SheetCopilotPanel";
+import { MockSpeechRecognition, installVoiceTestStubs } from "../test/voiceTestUtils";
 
 const queryPreconstructionCopilot = vi.fn();
 
@@ -12,6 +13,7 @@ vi.mock("../services/preconstruction", () => ({
 describe("SheetCopilotPanel", () => {
   beforeEach(() => {
     queryPreconstructionCopilot.mockReset();
+    installVoiceTestStubs();
   });
 
   it("executes a returned analysis action plan", async () => {
@@ -99,5 +101,57 @@ describe("SheetCopilotPanel", () => {
 
     expect(await screen.findByText(/select an annotation first/i)).toBeInTheDocument();
     expect(onCreateTakeoffFromAnnotation).not.toHaveBeenCalled();
+  });
+
+  it("runs a spoken sheet command through the returned action plan", async () => {
+    const onRunAnalysis = vi.fn().mockResolvedValue(undefined);
+    queryPreconstructionCopilot.mockResolvedValue({
+      status: "grounded",
+      answer: "I can run analysis on this sheet.",
+      scope: {
+        project_id: "project-1",
+        project_code: "BID-1",
+        project_name: "Building A",
+        plan_set_id: "set-1",
+        plan_set_name: "Bid Set",
+        plan_sheet_id: "sheet-1",
+        plan_sheet_name: "A101",
+      },
+      citations: [],
+      suggested_prompts: [],
+      action_plan: {
+        kind: "run_analysis",
+        label: "Run sheet analysis",
+        detail: "Trigger a new run.",
+        prompt: "Find all doors on A101",
+        provider_name: "mock",
+      },
+    });
+
+    render(
+      <SheetCopilotPanel
+        projectId="project-1"
+        planSetId="set-1"
+        sheetId="sheet-1"
+        sheetLabel="A101"
+        analysisProvider="mock"
+        onRunAnalysis={onRunAnalysis}
+        onBatchAccept={vi.fn().mockResolvedValue(undefined)}
+        onCreateTakeoffFromAnnotation={vi.fn().mockResolvedValue(undefined)}
+        onCreateSnapshot={vi.fn().mockResolvedValue(undefined)}
+        onExport={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /start voice/i }));
+
+    const recognition = MockSpeechRecognition.instances.at(-1);
+    expect(recognition).toBeTruthy();
+    act(() => {
+      recognition?.emitTranscript("Find all doors on A101");
+    });
+
+    await waitFor(() => expect(onRunAnalysis).toHaveBeenCalledWith("Find all doors on A101", "mock"));
+    expect(await screen.findByText(/executed: run sheet analysis/i)).toBeInTheDocument();
   });
 });

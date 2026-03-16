@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { queryPreconstructionCopilot } from "../services/preconstruction";
 import type { PreconstructionCopilotCitation, PreconstructionCopilotResponse } from "../types/api";
+import { useBrowserVoiceCopilot } from "./useBrowserVoiceCopilot";
 
 type AnalysisProvider = "mock" | "openai_vision" | "cad_dxf";
 type AssemblyProfile = "auto" | "none" | "door_set" | "window_set" | "fixture_set";
@@ -64,6 +65,8 @@ export function SheetCopilotPanel({
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(false);
+  const [pendingSpokenReply, setPendingSpokenReply] = useState<string | null>(null);
 
   const quickPrompts = useMemo(
     () => [
@@ -75,6 +78,23 @@ export function SheetCopilotPanel({
     ],
     [selectedAnnotationId, sheetLabel]
   );
+
+  useEffect(() => {
+    setVoiceRepliesEnabled(false);
+    setPendingSpokenReply(null);
+    setQuestion("");
+    setError("");
+  }, [planSetId, projectId, sheetId]);
+
+  const latestAssistantMessage = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "assistant") {
+        return message;
+      }
+    }
+    return null;
+  }, [messages]);
 
   const executeActionPlan = async (actionPlan: NonNullable<PreconstructionCopilotResponse["action_plan"]>) => {
     switch (actionPlan.kind) {
@@ -102,7 +122,7 @@ export function SheetCopilotPanel({
     }
   };
 
-  const submitQuestion = async (promptOverride?: string) => {
+  const submitQuestion = useCallback(async (promptOverride?: string) => {
     const prompt = (promptOverride ?? question).trim();
     if (!prompt || loading) return;
 
@@ -132,23 +152,65 @@ export function SheetCopilotPanel({
         const actionLabel = await executeActionPlan(response.action_plan);
         content = `${response.answer} Executed: ${actionLabel}.`;
       }
+      const assistantMessage: CopilotMessage = {
+        id: createMessageId(),
+        role: "assistant",
+        content,
+        status: response.status,
+        citations: response.citations,
+      };
 
       setMessages((current) => [
         ...current,
-        {
-          id: createMessageId(),
-          role: "assistant",
-          content,
-          status: response.status,
-          citations: response.citations,
-        },
+        assistantMessage,
       ]);
+      if (voiceRepliesEnabled) {
+        setPendingSpokenReply(assistantMessage.content);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to run sheet copilot command.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    analysisProvider,
+    executeActionPlan,
+    loading,
+    planSetId,
+    projectId,
+    question,
+    selectedAnnotationId,
+    sheetId,
+    voiceRepliesEnabled,
+  ]);
+
+  const {
+    recognitionSupported,
+    speechOutputSupported,
+    isListening,
+    isSpeaking,
+    interimTranscript,
+    voiceError,
+    clearVoiceError,
+    startListening,
+    stopListening,
+    speakText,
+    stopSpeaking,
+  } = useBrowserVoiceCopilot({
+    onFinalTranscript: (transcript) => {
+      setQuestion(transcript);
+      void submitQuestion(transcript);
+    },
+    onInterimTranscript: (transcript) => {
+      setQuestion(transcript);
+    },
+  });
+
+  useEffect(() => {
+    if (!voiceRepliesEnabled || !pendingSpokenReply) return;
+    speakText(pendingSpokenReply);
+    setPendingSpokenReply(null);
+  }, [pendingSpokenReply, speakText, voiceRepliesEnabled]);
 
   return (
     <div className="card" style={{ flex: "1" }}>
@@ -162,6 +224,51 @@ export function SheetCopilotPanel({
             {prompt}
           </button>
         ))}
+      </div>
+      <div className="card" style={{ marginBottom: "0.75rem", padding: "0.75rem", background: "#f8fafc" }}>
+        <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+          <button
+            type="button"
+            onClick={() => {
+              clearVoiceError();
+              startListening();
+            }}
+            disabled={!recognitionSupported || loading}
+          >
+            {isListening ? "Listening..." : "Start voice"}
+          </button>
+          <button type="button" onClick={stopListening} disabled={!isListening}>
+            Stop
+          </button>
+          <button
+            type="button"
+            onClick={() => setVoiceRepliesEnabled((current) => !current)}
+            disabled={!speechOutputSupported}
+          >
+            {voiceRepliesEnabled ? "Spoken replies on" : "Spoken replies off"}
+          </button>
+          <button
+            type="button"
+            onClick={() => latestAssistantMessage && speakText(latestAssistantMessage.content)}
+            disabled={!speechOutputSupported || !latestAssistantMessage}
+          >
+            Speak last answer
+          </button>
+          <button type="button" onClick={stopSpeaking} disabled={!isSpeaking}>
+            Stop speaking
+          </button>
+        </div>
+        {!recognitionSupported ? (
+          <p className="empty-hint" style={{ marginBottom: "0.25rem" }}>
+            Voice input uses the browser speech-recognition API and is unavailable in this browser.
+          </p>
+        ) : null}
+        {voiceError ? <p className="error">{voiceError}</p> : null}
+        {isListening || interimTranscript ? (
+          <p className="empty-hint" style={{ marginBottom: 0 }}>
+            {interimTranscript ? `Hearing: ${interimTranscript}` : "Listening for a command..."}
+          </p>
+        ) : null}
       </div>
       {error ? <p className="error">{error}</p> : null}
       <div style={{ maxHeight: "260px", overflowY: "auto", marginBottom: "0.75rem" }} aria-live="polite">

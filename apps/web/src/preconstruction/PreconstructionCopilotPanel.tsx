@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { queryPreconstructionCopilot } from "../services/preconstruction";
 import type { PreconstructionCopilotCitation, PreconstructionCopilotResponse } from "../types/api";
+import { useBrowserVoiceCopilot } from "./useBrowserVoiceCopilot";
 
 type Props = {
   projectId: string;
@@ -63,12 +64,16 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(false);
+  const [pendingSpokenReply, setPendingSpokenReply] = useState<string | null>(null);
 
   useEffect(() => {
     setMessages([buildWelcomeMessage(projectLabel, planSetName)]);
     setQuestion("");
     setError("");
     setLoading(false);
+    setVoiceRepliesEnabled(false);
+    setPendingSpokenReply(null);
   }, [projectId, projectLabel, planSetId, planSetName]);
 
   const latestSuggestedPrompts = useMemo(() => {
@@ -81,7 +86,17 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
     return [];
   }, [messages]);
 
-  const submitQuestion = async (promptOverride?: string) => {
+  const latestAssistantMessage = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "assistant") {
+        return message;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  const submitQuestion = useCallback(async (promptOverride?: string) => {
     const prompt = (promptOverride ?? question).trim();
     if (!projectId || !prompt || loading) {
       return;
@@ -104,23 +119,55 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
         plan_set: planSetId ?? null,
         question: prompt,
       });
+      const assistantMessage: CopilotMessage = {
+        id: createMessageId(),
+        role: "assistant",
+        content: response.answer,
+        status: response.status,
+        citations: response.citations,
+        suggestedPrompts: response.suggested_prompts,
+      };
       setMessages((current) => [
         ...current,
-        {
-          id: createMessageId(),
-          role: "assistant",
-          content: response.answer,
-          status: response.status,
-          citations: response.citations,
-          suggestedPrompts: response.suggested_prompts,
-        },
+        assistantMessage,
       ]);
+      if (voiceRepliesEnabled) {
+        setPendingSpokenReply(assistantMessage.content);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to query estimator copilot.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [loading, planSetId, projectId, question, voiceRepliesEnabled]);
+
+  const {
+    recognitionSupported,
+    speechOutputSupported,
+    isListening,
+    isSpeaking,
+    interimTranscript,
+    voiceError,
+    clearVoiceError,
+    startListening,
+    stopListening,
+    speakText,
+    stopSpeaking,
+  } = useBrowserVoiceCopilot({
+    onFinalTranscript: (transcript) => {
+      setQuestion(transcript);
+      void submitQuestion(transcript);
+    },
+    onInterimTranscript: (transcript) => {
+      setQuestion(transcript);
+    },
+  });
+
+  useEffect(() => {
+    if (!voiceRepliesEnabled || !pendingSpokenReply) return;
+    speakText(pendingSpokenReply);
+    setPendingSpokenReply(null);
+  }, [pendingSpokenReply, speakText, voiceRepliesEnabled]);
 
   return (
     <Card className="min-w-0">
@@ -186,6 +233,64 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
             ))}
           </div>
         ) : null}
+        <div className="space-y-2 rounded-lg border border-border/70 bg-muted/40 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant={isListening ? "secondary" : "outline"}
+              onClick={() => {
+                clearVoiceError();
+                startListening();
+              }}
+              disabled={!recognitionSupported || loading || !projectId}
+            >
+              {isListening ? "Listening..." : "Start voice"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={stopListening}
+              disabled={!isListening}
+            >
+              Stop
+            </Button>
+            <Button
+              type="button"
+              variant={voiceRepliesEnabled ? "default" : "outline"}
+              onClick={() => setVoiceRepliesEnabled((current) => !current)}
+              disabled={!speechOutputSupported}
+            >
+              {voiceRepliesEnabled ? "Spoken replies on" : "Spoken replies off"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => latestAssistantMessage && speakText(latestAssistantMessage.content)}
+              disabled={!speechOutputSupported || !latestAssistantMessage}
+            >
+              Speak last answer
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={stopSpeaking}
+              disabled={!isSpeaking}
+            >
+              Stop speaking
+            </Button>
+          </div>
+          {!recognitionSupported ? (
+            <p className="text-xs text-muted-foreground">
+              Voice input uses the browser speech-recognition API and is unavailable in this browser.
+            </p>
+          ) : null}
+          {voiceError ? <p className="text-xs text-destructive">{voiceError}</p> : null}
+          {isListening || interimTranscript ? (
+            <p className="text-xs text-muted-foreground">
+              {interimTranscript ? `Hearing: ${interimTranscript}` : "Listening for a command..."}
+            </p>
+          ) : null}
+        </div>
         <form
           className="flex flex-col gap-2 sm:flex-row"
           onSubmit={(event) => {

@@ -1,6 +1,6 @@
 # Preconstruction Plan Annotation
 
-Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and DWG), project document ingestion (PDF, TXT, MD), on-sheet annotation, takeoff tracking, AI suggestion review (configurable provider), revision snapshots, and exports.
+Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and DWG), project document ingestion (PDF, TXT, MD), on-sheet annotation, takeoff tracking, AI suggestion review (configurable provider), grounded copilot workflows with browser voice support, revision snapshots, and exports.
 
 ## Access and roles
 
@@ -15,14 +15,14 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 2. Create a plan set.
 3. Upload one or more plan files (`.pdf`, `.dxf`, or `.dwg`) to the selected plan set.
 4. Upload supporting project documents (`.pdf`, `.txt`, `.md`) as project-wide documents or scoped to the selected plan set. Parsed files become downloadable; failed parses are quarantined and remain unavailable for download. Scanned PDFs can use OCR fallback when the API environment has Tesseract configured.
-5. Use the typed **Estimator Copilot** on the dashboard to ask grounded questions about the selected project or plan set.
+5. Use the **Estimator Copilot** on the dashboard to ask grounded questions about the selected project or plan set by typing or, where the browser supports it, by voice.
 6. Open a sheet in the viewer.
 7. Create point/rectangle/polygon/polyline annotations directly on the canvas.
 8. (Optional) Set sheet calibration (full-sheet width/height + unit) to enable auto area/length quantity estimates.
 9. Create takeoff items manually or from selected annotations (single-line or assembly package mode).
 10. Review takeoff rollups, filter the workspace, and edit quantity/cost code/bid package/review state as needed.
 11. Run AI analysis, then accept/reject/edit suggestions.
-12. Use the sheet-level copilot to type commands such as:
+12. Use the sheet-level copilot to type or speak commands such as:
     - run analysis on the current sheet
     - batch-accept high-confidence suggestions
     - create a takeoff package from the selected annotation
@@ -78,10 +78,13 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - routes category/review shorthand questions such as pending doors into takeoff summaries instead of document search
   - retrieval now favors selected-plan-set docs, matching document types, and newer relevant sources before generic fallback matches
   - explicitly reports when a needed spec, RFI, addendum, submittal, or vendor doc is not uploaded or did not parse yet
+  - optional browser voice input captures spoken questions into the same grounded workflow
+  - optional spoken replies read grounded answers aloud without changing source/citation behavior
 - Sheet copilot inside the viewer:
-  - understands typed action commands in sheet context
+  - understands typed or spoken action commands in sheet context
   - returns a structured action plan before execution
   - can run analysis, batch-accept suggestions, create takeoff packages from the selected annotation, create snapshots, and export CSV/JSON
+  - reuses the same audited actions as the manual sheet workflow
   - reuses the existing audited API flows instead of mutating client state directly
 - Estimator-grade quantity normalization:
   - applies to AI-generated rows and manual takeoff create/edit flows
@@ -108,7 +111,8 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 - PDF project document parsing requires `PyMuPDF` in the API environment.
 - OCR fallback is heuristic and only runs on sparse-text PDF pages; poor scans can still fail or produce noisy text.
 - Retrieval is still deterministic and citation-first, but now includes scope/type/recency weighting rather than plain token count alone.
-- The typed copilot does not yet support voice interaction or structured revision diffs.
+- Voice input/output depends on browser speech APIs and gracefully falls back to typed interaction where unsupported.
+- The copilot still does not support structured revision diffs.
 - No snapshot diff/compare screen.
 - "PDF metadata" export remains a placeholder, not a generated PDF file.
 

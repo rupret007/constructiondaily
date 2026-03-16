@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PreconstructionCopilotPanel } from "./PreconstructionCopilotPanel";
+import { MockSpeechRecognition, installVoiceTestStubs } from "../test/voiceTestUtils";
 
 const queryPreconstructionCopilot = vi.fn();
 
@@ -10,8 +11,11 @@ vi.mock("../services/preconstruction", () => ({
 }));
 
 describe("PreconstructionCopilotPanel", () => {
+  let speak: ReturnType<typeof vi.fn>;
+
   beforeEach(() => {
     queryPreconstructionCopilot.mockReset();
+    ({ speak } = installVoiceTestStubs());
   });
 
   it("renders the scoped welcome message", () => {
@@ -72,5 +76,52 @@ describe("PreconstructionCopilotPanel", () => {
     expect(await screen.findByText(/i found 3 pending door takeoff rows/i)).toBeInTheDocument();
     expect(screen.getByText(/takeoff summary/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /which sheets in this plan set are calibrated/i })).toBeInTheDocument();
+  });
+
+  it("submits a spoken question and can read the answer aloud", async () => {
+    queryPreconstructionCopilot.mockResolvedValue({
+      status: "grounded",
+      answer: "I found 5 calibrated sheets in Pricing Set.",
+      scope: {
+        project_id: "project-1",
+        project_code: "BID-1",
+        project_name: "Building A",
+        plan_set_id: "set-1",
+        plan_set_name: "Pricing Set",
+        plan_sheet_id: null,
+        plan_sheet_name: null,
+      },
+      citations: [],
+      suggested_prompts: [],
+    });
+
+    render(
+      <PreconstructionCopilotPanel
+        projectId="project-1"
+        projectLabel="BID-1 - Building A"
+        planSetId="set-1"
+        planSetName="Pricing Set"
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /spoken replies off/i }));
+    await userEvent.click(screen.getByRole("button", { name: /start voice/i }));
+
+    const recognition = MockSpeechRecognition.instances.at(-1);
+    expect(recognition).toBeTruthy();
+    act(() => {
+      recognition?.emitTranscript("Which sheets are calibrated?");
+    });
+
+    await waitFor(() =>
+      expect(queryPreconstructionCopilot).toHaveBeenCalledWith({
+        project: "project-1",
+        plan_set: "set-1",
+        question: "Which sheets are calibrated?",
+      })
+    );
+    expect(await screen.findByText(/i found 5 calibrated sheets in pricing set/i)).toBeInTheDocument();
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(1));
+    expect(speak.mock.calls[0][0].text).toBe("I found 5 calibrated sheets in Pricing Set.");
   });
 });
