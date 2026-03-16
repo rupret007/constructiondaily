@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import tempfile
 from typing import Any
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 
@@ -51,6 +55,12 @@ STOPWORDS = {
     "would",
     "your",
 }
+SPEC_QUESTION_KEYWORDS = ("spec", "specs", "specification", "specifications", "section", "sections")
+ADDENDUM_QUESTION_KEYWORDS = ("addendum", "addenda")
+RFI_QUESTION_KEYWORDS = ("rfi", "rfis", "request for information")
+SUBMITTAL_QUESTION_KEYWORDS = ("submittal", "submittals", "shop drawing", "shop drawings")
+VENDOR_QUESTION_KEYWORDS = ("vendor", "vendors", "manufacturer", "manufacturers", "model", "models", "cut sheet", "cutsheet")
+SCOPE_QUESTION_KEYWORDS = ("scope", "scope letter", "bid instruction", "bid instructions")
 
 
 def process_project_document(document: ProjectDocument) -> ProjectDocument:
@@ -119,7 +129,7 @@ def search_project_documents(
     if not query_tokens:
         return {"document_count": len(document_list), "matches": []}
 
-    matches: list[dict[str, Any]] = []
+    best_matches: dict[str, dict[str, Any]] = {}
     question_lower = question.lower()
     for document in document_list:
         title_lower = document.title.lower()
@@ -129,24 +139,25 @@ def search_project_documents(
                 title=title_lower,
                 query_tokens=query_tokens,
                 question_lower=question_lower,
+                document=document,
+                selected_plan_set=plan_set,
             )
             if score <= 0:
                 continue
-            matches.append(
-                {
-                    "document": document,
-                    "chunk": chunk,
-                    "score": score,
-                    "snippet": _snippet_from_content(chunk.content, query_tokens),
-                }
-            )
+            key = str(document.id)
+            candidate = {
+                "document": document,
+                "chunk": chunk,
+                "score": score,
+                "snippet": _snippet_from_content(chunk.content, query_tokens),
+            }
+            existing = best_matches.get(key)
+            if existing is None or _match_sort_key(candidate) < _match_sort_key(existing):
+                best_matches[key] = candidate
 
+    matches = list(best_matches.values())
     matches.sort(
-        key=lambda item: (
-            -item["score"],
-            -_created_at_sort_value(item["document"]),
-            item["chunk"].chunk_index,
-        )
+        key=_match_sort_key
     )
     return {"document_count": len(document_list), "matches": matches[:limit]}
 
@@ -208,14 +219,19 @@ def _extract_pdf_pages(path) -> list[dict[str, Any]]:
         raise RuntimeError("PyMuPDF is required to parse PDF project documents.") from exc
 
     pages: list[dict[str, Any]] = []
+    ocr_command = _resolve_ocr_command()
     try:
         with fitz.open(path) as pdf:
             for page_number in range(pdf.page_count):
                 page = pdf.load_page(page_number)
-                text = _normalize_whitespace(page.get_text("text"))
+                text = _extract_page_text_with_optional_ocr(page, fitz, ocr_command=ocr_command)
                 pages.append({"page_number": page_number + 1, "content": text})
     except Exception as exc:  # noqa: BLE001 - PyMuPDF raises parser-specific exceptions
         raise RuntimeError(f"PDF project document could not be parsed: {exc}") from exc
+    if not any(page["content"] for page in pages) and settings.PRECONSTRUCTION_DOCUMENT_OCR_ENABLED and not ocr_command:
+        raise RuntimeError(
+            "No extractable text was found in this PDF. Install Tesseract or configure PRECONSTRUCTION_DOCUMENT_OCR_COMMAND to parse scanned PDFs."
+        )
     return pages
 
 
@@ -284,30 +300,47 @@ def _split_paragraph(paragraph: str, target_chars: int) -> list[str]:
 
 
 def _tokenize(text: str) -> list[str]:
-    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    tokens = re.findall(r"[a-z0-9][a-z0-9-]*", text.lower())
     unique_tokens: list[str] = []
     seen: set[str] = set()
     for token in tokens:
-        if len(token) < 3 or token in STOPWORDS or token in seen:
+        if (len(token) < 3 and not any(char.isdigit() for char in token)) or token in STOPWORDS or token in seen:
             continue
         unique_tokens.append(token)
         seen.add(token)
     return unique_tokens
 
 
-def _score_chunk(*, content: str, title: str, query_tokens: list[str], question_lower: str) -> int:
+def _score_chunk(
+    *,
+    content: str,
+    title: str,
+    query_tokens: list[str],
+    question_lower: str,
+    document: ProjectDocument,
+    selected_plan_set: PlanSet | None,
+) -> int:
     content_lower = content.lower()
     score = 0
+    title_hits = 0
     for token in query_tokens:
         occurrences = content_lower.count(token)
         if occurrences:
             score += occurrences * 3
         if token in title:
             score += 4
+            title_hits += 1
     if question_lower and question_lower in content_lower:
         score += 12
+    if query_tokens:
+        unique_hits = sum(1 for token in query_tokens if token in content_lower)
+        score += unique_hits * 2
+    if title_hits and title_hits == len(query_tokens):
+        score += 6
     if score and any(f"section {token}" in content_lower for token in query_tokens if token.isdigit()):
         score += 2
+    score += _document_scope_bonus(document, selected_plan_set)
+    score += _document_type_bonus(document, question_lower)
     return score
 
 
@@ -323,3 +356,97 @@ def _snippet_from_content(content: str, query_tokens: list[str], max_chars: int 
     if end < len(normalized):
         snippet = f"{snippet}..."
     return snippet
+
+
+def _match_sort_key(item: dict[str, Any]) -> tuple[float, float, int]:
+    return (
+        -item["score"],
+        -_created_at_sort_value(item["document"]),
+        item["chunk"].chunk_index,
+    )
+
+
+def _document_scope_bonus(document: ProjectDocument, selected_plan_set: PlanSet | None) -> int:
+    if selected_plan_set is None:
+        return 0
+    if document.plan_set_id == selected_plan_set.id:
+        return 8
+    if document.plan_set_id is None:
+        return 2
+    return -4
+
+
+def _document_type_bonus(document: ProjectDocument, question_lower: str) -> int:
+    bonuses = {
+        ProjectDocument.DocumentType.SPEC: SPEC_QUESTION_KEYWORDS,
+        ProjectDocument.DocumentType.ADDENDUM: ADDENDUM_QUESTION_KEYWORDS,
+        ProjectDocument.DocumentType.RFI: RFI_QUESTION_KEYWORDS,
+        ProjectDocument.DocumentType.SUBMITTAL: SUBMITTAL_QUESTION_KEYWORDS,
+        ProjectDocument.DocumentType.VENDOR: VENDOR_QUESTION_KEYWORDS,
+        ProjectDocument.DocumentType.SCOPE: SCOPE_QUESTION_KEYWORDS,
+    }
+    keywords = bonuses.get(document.document_type, ())
+    return 8 if any(keyword in question_lower for keyword in keywords) else 0
+
+
+def _extract_page_text_with_optional_ocr(page, fitz_module, *, ocr_command: str | None) -> str:
+    extracted_text = _normalize_whitespace(page.get_text("text"))
+    if not _should_attempt_pdf_page_ocr(extracted_text):
+        return extracted_text
+    ocr_text = _run_pdf_page_ocr(page, fitz_module, ocr_command)
+    ocr_text = _normalize_whitespace(ocr_text)
+    if not ocr_text:
+        return extracted_text
+    if not extracted_text:
+        return ocr_text
+    if len(ocr_text) > len(extracted_text) + 8:
+        return ocr_text
+    if extracted_text.lower() in ocr_text.lower():
+        return ocr_text
+    if ocr_text.lower() in extracted_text.lower():
+        return extracted_text
+    return _normalize_whitespace(f"{extracted_text}\n\n{ocr_text}")
+
+
+def _should_attempt_pdf_page_ocr(extracted_text: str) -> bool:
+    if not settings.PRECONSTRUCTION_DOCUMENT_OCR_ENABLED:
+        return False
+    return len(extracted_text.strip()) < settings.PRECONSTRUCTION_DOCUMENT_OCR_MIN_TEXT_CHARS
+
+
+def _resolve_ocr_command() -> str | None:
+    if not settings.PRECONSTRUCTION_DOCUMENT_OCR_ENABLED:
+        return None
+    configured = settings.PRECONSTRUCTION_DOCUMENT_OCR_COMMAND.strip()
+    if not configured:
+        return None
+    resolved = shutil.which(configured)
+    if resolved:
+        return resolved
+    if shutil.which(configured.split()[0]):
+        return configured
+    return None
+
+
+def _run_pdf_page_ocr(page, fitz_module, ocr_command: str | None) -> str:
+    if not ocr_command:
+        return ""
+    scale = max(settings.PRECONSTRUCTION_DOCUMENT_OCR_SCALE, 1)
+    matrix = fitz_module.Matrix(scale, scale)
+    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as image_file:
+        pixmap.save(image_file.name)
+        command = [ocr_command, image_file.name, "stdout", "--psm", "6"]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=settings.PRECONSTRUCTION_DOCUMENT_OCR_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except OSError:
+            return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout or ""

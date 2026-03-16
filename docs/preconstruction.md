@@ -14,7 +14,7 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 1. Open **Preconstruction** and choose a project.
 2. Create a plan set.
 3. Upload one or more plan files (`.pdf`, `.dxf`, or `.dwg`) to the selected plan set.
-4. Upload supporting project documents (`.pdf`, `.txt`, `.md`) as project-wide documents or scoped to the selected plan set. Parsed files become downloadable; failed parses are quarantined and remain unavailable for download.
+4. Upload supporting project documents (`.pdf`, `.txt`, `.md`) as project-wide documents or scoped to the selected plan set. Parsed files become downloadable; failed parses are quarantined and remain unavailable for download. Scanned PDFs can use OCR fallback when the API environment has Tesseract configured.
 5. Use the typed **Estimator Copilot** on the dashboard to ask grounded questions about the selected project or plan set.
 6. Open a sheet in the viewer.
 7. Create point/rectangle/polygon/polyline annotations directly on the canvas.
@@ -37,6 +37,7 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - `md`
   - optional plan-set scoping on top of project-wide docs
   - raw upload staging with safe promotion on successful parse and quarantine on parse failure
+  - optional OCR fallback for scanned/image-only PDFs via Tesseract
 - Layer visibility toggles.
 - Annotation inspector with delete and "create takeoff package" actions.
 - Takeoff review workspace with:
@@ -69,6 +70,7 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - scopes answers to the selected project and optional selected plan set
   - includes project-wide docs plus plan-set-scoped docs when a plan set is selected
   - routes category/review shorthand questions such as pending doors into takeoff summaries instead of document search
+  - retrieval now favors selected-plan-set docs, matching document types, and newer relevant sources before generic fallback matches
   - explicitly reports when a needed spec, RFI, addendum, submittal, or vendor doc is not uploaded or did not parse yet
 - Estimator-grade quantity normalization:
   - applies to AI-generated rows and manual takeoff create/edit flows
@@ -86,14 +88,15 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 
 - Default AI provider remains `mock` unless `PRECONSTRUCTION_ANALYSIS_PROVIDER=openai_vision` is configured.
 - `openai_vision` requires `PRECONSTRUCTION_OPENAI_API_KEY` and `pymupdf` installed in the API environment.
+- OCR fallback for scanned project PDFs requires Tesseract installed in the API environment or configured via `PRECONSTRUCTION_DOCUMENT_OCR_COMMAND`.
 - `openai_vision` supports PDF sheets only.
 - `cad_dxf` supports ASCII DXF directly.
 - DWG support requires `PRECONSTRUCTION_DWG_CONVERTER_COMMAND` to convert DWG -> DXF server-side.
 - Binary DXF is still unsupported.
 - Provider quality still depends on prompt quality, plan clarity, and calibration quality.
 - PDF project document parsing requires `PyMuPDF` in the API environment.
-- No OCR pipeline yet for scanned image-only PDFs.
-- Retrieval is deterministic text search for now; embeddings/reranking/model-grounded synthesis are later phases.
+- OCR fallback is heuristic and only runs on sparse-text PDF pages; poor scans can still fail or produce noisy text.
+- Retrieval is still deterministic and citation-first, but now includes scope/type/recency weighting rather than plain token count alone.
 - The typed copilot does not yet support voice interaction or structured revision diffs.
 - No snapshot diff/compare screen.
 - "PDF metadata" export remains a placeholder, not a generated PDF file.
@@ -112,6 +115,11 @@ Set in `apps/api/.env`:
 - `PRECONSTRUCTION_CAD_PREVIEW_MAX_ITEMS=800`
 - `PRECONSTRUCTION_DWG_CONVERTER_COMMAND=...` (must include `{input}` and either `{output}` or `{output_dir}`)
 - `PRECONSTRUCTION_DWG_CONVERTER_TIMEOUT_SECONDS=180`
+- `PRECONSTRUCTION_DOCUMENT_OCR_ENABLED=true`
+- `PRECONSTRUCTION_DOCUMENT_OCR_COMMAND=tesseract`
+- `PRECONSTRUCTION_DOCUMENT_OCR_TIMEOUT_SECONDS=30`
+- `PRECONSTRUCTION_DOCUMENT_OCR_SCALE=2`
+- `PRECONSTRUCTION_DOCUMENT_OCR_MIN_TEXT_CHARS=24`
 - `PRECONSTRUCTION_LINEAR_ROUND_STEP_FEET=0.0001`
 - `PRECONSTRUCTION_AREA_ROUND_STEP_SQFT=0.0001`
 - `PRECONSTRUCTION_CUBIC_ROUND_STEP_CY=0.0001`

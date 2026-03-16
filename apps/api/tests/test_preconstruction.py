@@ -7,7 +7,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from reportlab.pdfgen import canvas
 from rest_framework.test import APIClient
@@ -62,6 +62,14 @@ def build_pdf_with_text(*lines: str) -> bytes:
     for line in lines:
         pdf.drawString(72, y, line)
         y -= 18
+    pdf.save()
+    return buffer.getvalue()
+
+
+def build_blank_pdf() -> bytes:
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer)
+    pdf.showPage()
     pdf.save()
     return buffer.getvalue()
 
@@ -2248,6 +2256,35 @@ class PreconstructionAPITests(TestCase):
             1,
         )
 
+    @override_settings(
+        PRECONSTRUCTION_DOCUMENT_OCR_ENABLED=True,
+        PRECONSTRUCTION_DOCUMENT_OCR_MIN_TEXT_CHARS=24,
+    )
+    @patch("preconstruction.document_services._resolve_ocr_command", return_value="tesseract")
+    @patch("preconstruction.document_services._run_pdf_page_ocr", return_value="Rated openings require hardware set BH-OCR.")
+    def test_project_document_upload_uses_ocr_for_scanned_pdf(self, _run_pdf_page_ocr, _resolve_ocr_command):
+        self.client.login(username="estimator1", password="test-pass")
+        pdf = BytesIO(build_blank_pdf())
+        pdf.name = "scanned-spec.pdf"
+
+        resp = self.client.post(
+            "/api/preconstruction/documents/",
+            {
+                "project": str(self.project.id),
+                "title": "Scanned Spec",
+                "document_type": "spec",
+                "file": pdf,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(resp.status_code, 201)
+        payload = resp.json()
+        self.assertEqual(payload["parse_status"], ProjectDocument.ParseStatus.PARSED)
+        document = ProjectDocument.objects.get(id=payload["id"])
+        self.assertIn("BH-OCR", document.extracted_text)
+        self.assertTrue(_run_pdf_page_ocr.called)
+
     def test_project_document_upload_promotes_safe_file_and_serves_download(self):
         self.client.login(username="estimator1", password="test-pass")
         pdf = BytesIO(build_pdf_with_text("Door hardware spec.", "Use BH-3 at rated openings."))
@@ -2425,7 +2462,7 @@ class PreconstructionAPITests(TestCase):
             "/api/preconstruction/copilot/query/",
             {
                 "project": str(self.project.id),
-                "question": "What does the spec say about rated openings?",
+                "question": "What hardware set is called for at rated openings?",
             },
             format="json",
         )
@@ -2436,6 +2473,137 @@ class PreconstructionAPITests(TestCase):
         self.assertGreaterEqual(len(payload["citations"]), 2)
         self.assertEqual(payload["citations"][0]["label"], "Door Notes 2")
         self.assertIn("bh-new", payload["answer"].lower())
+
+    def test_project_document_copilot_prefers_plan_set_scoped_docs_when_in_scope(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Scope Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        project_doc = ProjectDocument.objects.create(
+            project=self.project,
+            title="Project Hardware Spec",
+            document_type=ProjectDocument.DocumentType.SPEC,
+            original_filename="project.txt",
+            storage_key="project_documents/mock/project/safe/project.txt",
+            mime_type="text/plain",
+            file_extension="txt",
+            size_bytes=32,
+            page_count=1,
+            extracted_text="Rated openings use hardware set BH-PROJECT.",
+            parse_status=ProjectDocument.ParseStatus.PARSED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        ProjectDocumentChunk.objects.create(
+            document=project_doc,
+            chunk_index=0,
+            page_number=1,
+            content="Rated openings use hardware set BH-PROJECT.",
+        )
+        ProjectDocument.objects.filter(id=project_doc.id).update(created_at=timezone.now())
+
+        plan_set_doc = ProjectDocument.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="Scoped Hardware Spec",
+            document_type=ProjectDocument.DocumentType.SPEC,
+            original_filename="scoped.txt",
+            storage_key="project_documents/mock/scope-set/safe/scoped.txt",
+            mime_type="text/plain",
+            file_extension="txt",
+            size_bytes=32,
+            page_count=1,
+            extracted_text="Rated openings use hardware set BH-SCOPED.",
+            parse_status=ProjectDocument.ParseStatus.PARSED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        ProjectDocumentChunk.objects.create(
+            document=plan_set_doc,
+            chunk_index=0,
+            page_number=1,
+            content="Rated openings use hardware set BH-SCOPED.",
+        )
+        ProjectDocument.objects.filter(id=plan_set_doc.id).update(created_at=timezone.now() - timedelta(days=1))
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "question": "What hardware set is called for at rated openings?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertEqual(payload["citations"][0]["label"], "Scoped Hardware Spec")
+        self.assertIn("bh-scoped", payload["answer"].lower())
+
+    def test_project_document_copilot_prefers_matching_document_type_keywords(self):
+        self.client.login(username="estimator1", password="test-pass")
+        spec_doc = ProjectDocument.objects.create(
+            project=self.project,
+            title="Door Spec",
+            document_type=ProjectDocument.DocumentType.SPEC,
+            original_filename="spec.txt",
+            storage_key="project_documents/mock/project/safe/spec.txt",
+            mime_type="text/plain",
+            file_extension="txt",
+            size_bytes=32,
+            page_count=1,
+            extracted_text="Rated openings use hardware set BH-SPEC.",
+            parse_status=ProjectDocument.ParseStatus.PARSED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        ProjectDocumentChunk.objects.create(
+            document=spec_doc,
+            chunk_index=0,
+            page_number=1,
+            content="Rated openings use hardware set BH-SPEC.",
+        )
+        addendum_doc = ProjectDocument.objects.create(
+            project=self.project,
+            title="Addendum 4",
+            document_type=ProjectDocument.DocumentType.ADDENDUM,
+            original_filename="addendum.txt",
+            storage_key="project_documents/mock/project/safe/addendum.txt",
+            mime_type="text/plain",
+            file_extension="txt",
+            size_bytes=32,
+            page_count=1,
+            extracted_text="Addendum 4 revises rated openings to hardware set BH-ADD.",
+            parse_status=ProjectDocument.ParseStatus.PARSED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        ProjectDocumentChunk.objects.create(
+            document=addendum_doc,
+            chunk_index=0,
+            page_number=1,
+            content="Addendum 4 revises rated openings to hardware set BH-ADD.",
+        )
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "question": "What does addendum 4 say about rated openings?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertEqual(payload["citations"][0]["label"], "Addendum 4")
+        self.assertIn("bh-add", payload["answer"].lower())
 
     def test_project_document_scope_includes_project_wide_docs_for_plan_set_queries(self):
         self.client.login(username="estimator1", password="test-pass")
