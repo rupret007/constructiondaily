@@ -351,6 +351,120 @@ class TakeoffItemSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class TakeoffSummaryUnitTotalSerializer(serializers.Serializer):
+    unit = serializers.CharField()
+    item_count = serializers.IntegerField()
+    quantity_total = serializers.CharField()
+
+
+class TakeoffSummaryCategoryTotalSerializer(serializers.Serializer):
+    category = serializers.CharField()
+    unit = serializers.CharField()
+    item_count = serializers.IntegerField()
+    quantity_total = serializers.CharField()
+
+
+class TakeoffSummaryReviewStateTotalSerializer(serializers.Serializer):
+    review_state = serializers.CharField()
+    item_count = serializers.IntegerField()
+
+
+class TakeoffSummarySourceTotalSerializer(serializers.Serializer):
+    source = serializers.CharField()
+    item_count = serializers.IntegerField()
+
+
+class TakeoffSummarySerializer(serializers.Serializer):
+    total_items = serializers.IntegerField()
+    pending_items = serializers.IntegerField()
+    accepted_items = serializers.IntegerField()
+    rejected_items = serializers.IntegerField()
+    edited_items = serializers.IntegerField()
+    manual_items = serializers.IntegerField()
+    ai_assisted_items = serializers.IntegerField()
+    linked_annotation_items = serializers.IntegerField()
+    unit_totals = TakeoffSummaryUnitTotalSerializer(many=True)
+    category_totals = TakeoffSummaryCategoryTotalSerializer(many=True)
+    review_state_totals = TakeoffSummaryReviewStateTotalSerializer(many=True)
+    source_totals = TakeoffSummarySourceTotalSerializer(many=True)
+
+
+class PlanSetEstimatingDashboardCoverageSerializer(serializers.Serializer):
+    total_sheet_count = serializers.IntegerField()
+    calibrated_sheet_count = serializers.IntegerField()
+    parsed_sheet_count = serializers.IntegerField()
+    analyzed_sheet_count = serializers.IntegerField()
+    sheets_with_takeoff_count = serializers.IntegerField()
+    pending_suggestion_count = serializers.IntegerField()
+    unassigned_takeoff_items = serializers.IntegerField()
+
+
+class PlanSetEstimatingDashboardTopCategorySerializer(serializers.Serializer):
+    category = serializers.CharField()
+    unit = serializers.CharField()
+    item_count = serializers.IntegerField()
+    quantity_total = serializers.CharField()
+
+
+class PlanSetEstimatingDashboardSheetRollupSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    title = serializers.CharField(allow_blank=True)
+    sheet_number = serializers.CharField(allow_blank=True)
+    discipline = serializers.CharField(allow_blank=True)
+    file_type = serializers.CharField()
+    parse_status = serializers.CharField()
+    calibrated = serializers.BooleanField()
+    total_items = serializers.IntegerField()
+    pending_items = serializers.IntegerField()
+    accepted_items = serializers.IntegerField()
+    edited_items = serializers.IntegerField()
+    rejected_items = serializers.IntegerField()
+    linked_annotation_items = serializers.IntegerField()
+    pending_suggestions = serializers.IntegerField()
+    latest_analysis_status = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    latest_analysis_at = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    top_categories = PlanSetEstimatingDashboardTopCategorySerializer(many=True)
+
+
+class PlanSetEstimatingDashboardDisciplineRollupSerializer(serializers.Serializer):
+    discipline = serializers.CharField()
+    sheet_count = serializers.IntegerField()
+    calibrated_sheet_count = serializers.IntegerField()
+    parsed_sheet_count = serializers.IntegerField()
+    analyzed_sheet_count = serializers.IntegerField()
+    takeoff_total_items = serializers.IntegerField()
+    pending_items = serializers.IntegerField()
+    pending_suggestions = serializers.IntegerField()
+
+
+class PlanSetEstimatingDashboardSnapshotSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    name = serializers.CharField()
+    status = serializers.CharField()
+    created_at = serializers.CharField()
+
+
+class PlanSetEstimatingDashboardExportSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    export_type = serializers.CharField()
+    status = serializers.CharField()
+    created_at = serializers.CharField()
+
+
+class PlanSetEstimatingDashboardSerializer(serializers.Serializer):
+    plan_set_id = serializers.CharField()
+    plan_set_name = serializers.CharField()
+    plan_set_status = serializers.CharField()
+    version_label = serializers.CharField(allow_blank=True)
+    summary = TakeoffSummarySerializer()
+    coverage = PlanSetEstimatingDashboardCoverageSerializer()
+    discipline_rollups = PlanSetEstimatingDashboardDisciplineRollupSerializer(many=True)
+    sheet_rollups = PlanSetEstimatingDashboardSheetRollupSerializer(many=True)
+    unassigned_summary = TakeoffSummarySerializer()
+    latest_snapshot = PlanSetEstimatingDashboardSnapshotSerializer(required=False, allow_null=True)
+    latest_export = PlanSetEstimatingDashboardExportSerializer(required=False, allow_null=True)
+
+
 class PreconstructionCopilotQuerySerializer(serializers.Serializer):
     project = serializers.PrimaryKeyRelatedField(queryset=Project.objects.all())
     plan_set = serializers.PrimaryKeyRelatedField(queryset=PlanSet.objects.all(), required=False, allow_null=True)

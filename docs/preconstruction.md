@@ -1,6 +1,6 @@
 # Preconstruction Plan Annotation
 
-Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and DWG), project document ingestion (PDF, TXT, MD), on-sheet annotation, takeoff tracking, AI suggestion review (configurable provider), grounded copilot workflows with browser voice support, revision snapshots, and exports.
+Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and DWG), project document ingestion (PDF, TXT, MD), on-sheet annotation, takeoff tracking, plan-set estimating dashboards, AI suggestion review (configurable provider), grounded copilot workflows with browser voice support, revision snapshots, and exports.
 
 ## Access and roles
 
@@ -32,6 +32,7 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 14. Batch-accept high-confidence suggestions (default threshold 85%).
 15. Create snapshots and lock when final.
 16. Export JSON or CSV.
+17. Use the plan-set estimating dashboard to review cross-sheet coverage, discipline activity, unresolved suggestions, and sheet-specific work queues before publishing the estimate.
 
 ## Current capabilities
 
@@ -51,6 +52,11 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
   - unit/category summary totals for the current filter set
   - filters by review state, source, and category
   - editable quantity, category, subcategory, review state, cost code, bid package, and notes
+- Plan-set estimating dashboard:
+  - summarizes takeoff, calibration, parsing, and analysis coverage for the selected plan set
+  - rolls up activity by discipline
+  - exposes a sheet-by-sheet worklist sorted by pending review and pending suggestions
+  - highlights unassigned takeoff rows plus latest snapshot/export status without opening the sheet viewer
 - Annotation-to-takeoff package creation profiles:
   - `auto` (detects door/window/fixture patterns)
   - `none` (single-line takeoff only)
@@ -156,6 +162,7 @@ Base path: `/api/preconstruction/`
 - `annotations/{id}/create_takeoff/`: create takeoff package from one annotation (`assembly_profile` supported)
 - `takeoff/`: takeoff CRUD
 - `takeoff/summary/`: filtered takeoff rollups for estimator review workspace
+- `takeoff/dashboard/`: plan-set estimating dashboard with cross-sheet, discipline, and latest-activity rollups
 - `copilot/query/`: typed grounded Q&A over current preconstruction records
   - optional sheet-viewer action plans are also returned here when the request includes sheet context and an actionable command
 - `analysis/`: trigger/list AI analysis runs

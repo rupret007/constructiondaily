@@ -215,6 +215,70 @@ export type TakeoffSummary = {
   }>;
 };
 
+export type PlanSetEstimatingDashboard = {
+  plan_set_id: string;
+  plan_set_name: string;
+  plan_set_status: string;
+  version_label: string;
+  summary: TakeoffSummary;
+  coverage: {
+    total_sheet_count: number;
+    calibrated_sheet_count: number;
+    parsed_sheet_count: number;
+    analyzed_sheet_count: number;
+    sheets_with_takeoff_count: number;
+    pending_suggestion_count: number;
+    unassigned_takeoff_items: number;
+  };
+  discipline_rollups: Array<{
+    discipline: string;
+    sheet_count: number;
+    calibrated_sheet_count: number;
+    parsed_sheet_count: number;
+    analyzed_sheet_count: number;
+    takeoff_total_items: number;
+    pending_items: number;
+    pending_suggestions: number;
+  }>;
+  sheet_rollups: Array<{
+    id: string;
+    title: string;
+    sheet_number: string;
+    discipline: string;
+    file_type: string;
+    parse_status: string;
+    calibrated: boolean;
+    total_items: number;
+    pending_items: number;
+    accepted_items: number;
+    edited_items: number;
+    rejected_items: number;
+    linked_annotation_items: number;
+    pending_suggestions: number;
+    latest_analysis_status: string | null;
+    latest_analysis_at: string | null;
+    top_categories: Array<{
+      category: string;
+      unit: string;
+      item_count: number;
+      quantity_total: string;
+    }>;
+  }>;
+  unassigned_summary: TakeoffSummary;
+  latest_snapshot: {
+    id: string;
+    name: string;
+    status: string;
+    created_at: string;
+  } | null;
+  latest_export: {
+    id: string;
+    export_type: string;
+    status: string;
+    created_at: string;
+  } | null;
+};
+
 export type PreconstructionCopilotCitation = {
   kind: string;
   id: string;

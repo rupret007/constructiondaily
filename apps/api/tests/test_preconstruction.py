@@ -912,6 +912,178 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(filtered_resp.json()["total_items"], 1)
         self.assertEqual(filtered_resp.json()["pending_items"], 1)
 
+    def test_takeoff_dashboard_returns_cross_sheet_rollups(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Estimating Set",
+            status=PlanSet.Status.READY,
+            version_label="Bid Set 3",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        sheet_a = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="Level 1 Plan",
+            sheet_number="A101",
+            discipline="Architectural",
+            storage_key="plans/test/a101.pdf",
+            parse_status=PlanSheet.ParseStatus.PARSED,
+            calibrated_width="120",
+            calibrated_height="80",
+            created_by=self.user,
+        )
+        sheet_b = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="Level 2 Plan",
+            sheet_number="A201",
+            discipline="Architectural",
+            storage_key="plans/test/a201.pdf",
+            parse_status=PlanSheet.ParseStatus.PARSED,
+            created_by=self.user,
+        )
+        annotation = AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=sheet_a,
+            layer=AnnotationLayer.objects.create(
+                project=self.project,
+                plan_set=plan_set,
+                plan_sheet=sheet_a,
+                name="Doors",
+                created_by=self.user,
+            ),
+            annotation_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door A1",
+            source=AnnotationItem.Source.MANUAL,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=sheet_a,
+            source_annotation=annotation,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="4",
+            source=TakeoffItem.Source.AI_ASSISTED,
+            review_state=TakeoffItem.ReviewState.PENDING,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=sheet_a,
+            category=TakeoffItem.Category.WINDOWS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="2",
+            source=TakeoffItem.Source.MANUAL,
+            review_state=TakeoffItem.ReviewState.ACCEPTED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=sheet_b,
+            category=TakeoffItem.Category.LINEAR_MEASUREMENTS,
+            unit=TakeoffItem.Unit.LINEAR_FEET,
+            quantity="18.5",
+            source=TakeoffItem.Source.MANUAL,
+            review_state=TakeoffItem.ReviewState.EDITED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=None,
+            category=TakeoffItem.Category.CUSTOM,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity="1",
+            source=TakeoffItem.Source.MANUAL,
+            review_state=TakeoffItem.ReviewState.PENDING,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=sheet_a,
+            provider_name="mock",
+            user_prompt="Find all doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            started_at=timezone.now() - timedelta(minutes=3),
+            completed_at=timezone.now() - timedelta(minutes=2),
+            created_by=self.user,
+        )
+        AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=sheet_a,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door A1",
+            rationale="Detected door block",
+            confidence="0.97",
+        )
+        AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=sheet_a,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.2, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door A2",
+            rationale="Detected door block",
+            confidence="0.95",
+        )
+        snapshot = RevisionSnapshot.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            name="Pricing Snapshot",
+            status=RevisionSnapshot.Status.LOCKED,
+            created_by=self.user,
+        )
+        ExportRecord.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            revision_snapshot=snapshot,
+            export_type=ExportRecord.ExportType.CSV,
+            status=ExportRecord.Status.GENERATED,
+            created_by=self.user,
+        )
+
+        resp = self.client.get(
+            "/api/preconstruction/takeoff/dashboard/",
+            {"plan_set": str(plan_set.id)},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["plan_set_name"], "Estimating Set")
+        self.assertEqual(payload["summary"]["total_items"], 4)
+        self.assertEqual(payload["coverage"]["total_sheet_count"], 2)
+        self.assertEqual(payload["coverage"]["calibrated_sheet_count"], 1)
+        self.assertEqual(payload["coverage"]["analyzed_sheet_count"], 1)
+        self.assertEqual(payload["coverage"]["pending_suggestion_count"], 2)
+        self.assertEqual(payload["coverage"]["unassigned_takeoff_items"], 1)
+        self.assertEqual(payload["unassigned_summary"]["total_items"], 1)
+        self.assertEqual(payload["latest_snapshot"]["name"], "Pricing Snapshot")
+        self.assertEqual(payload["latest_export"]["export_type"], "csv")
+        self.assertEqual(len(payload["sheet_rollups"]), 2)
+        self.assertEqual(payload["sheet_rollups"][0]["sheet_number"], "A101")
+        self.assertEqual(payload["sheet_rollups"][0]["pending_suggestions"], 2)
+        self.assertEqual(payload["sheet_rollups"][0]["latest_analysis_status"], "completed")
+        self.assertTrue(
+            any(row["category"] == "doors" and row["quantity_total"] == "4.0000" for row in payload["sheet_rollups"][0]["top_categories"])
+        )
+        self.assertEqual(payload["discipline_rollups"][0]["discipline"], "Architectural")
+        self.assertEqual(payload["discipline_rollups"][0]["takeoff_total_items"], 3)
+
     def test_takeoff_create_rejects_cross_project_references(self):
         self.client.login(username="estimator1", password="test-pass")
         other_project = Project.objects.create(code="BID-3", name="Building C", location="Site Z")

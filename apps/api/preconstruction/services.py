@@ -7,6 +7,7 @@ import io
 import json
 import math
 import re
+from collections import defaultdict
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from typing import Any
 
@@ -1157,6 +1158,208 @@ def build_takeoff_summary(queryset) -> dict[str, Any]:
             {"source": row["source"], "item_count": row["item_count"]}
             for row in queryset.values("source").annotate(item_count=Count("id")).order_by("source")
         ],
+    }
+
+
+def _sheet_is_calibrated(plan_sheet: PlanSheet) -> bool:
+    width = _decimal_or_none(getattr(plan_sheet, "calibrated_width", None))
+    height = _decimal_or_none(getattr(plan_sheet, "calibrated_height", None))
+    return bool(width is not None and height is not None and width > 0 and height > 0)
+
+
+def _dashboard_timestamp(value) -> str | None:
+    if value is None:
+        return None
+    return timezone.localtime(value).isoformat()
+
+
+def build_plan_set_estimating_dashboard(
+    plan_set: PlanSet,
+    *,
+    queryset=None,
+) -> dict[str, Any]:
+    """Build plan-set level estimating rollups across all sheets for dashboard review."""
+    zero_decimal = Value(Decimal("0"), output_field=DecimalField(max_digits=14, decimal_places=4))
+    takeoffs = queryset if queryset is not None else TakeoffItem.objects.filter(plan_set=plan_set)
+    takeoffs = takeoffs.filter(plan_set=plan_set)
+    summary = build_takeoff_summary(takeoffs)
+
+    plan_sheets = list(plan_set.sheets.all().order_by("sheet_index", "created_at"))
+    sheet_rollup_rows = {
+        row["plan_sheet_id"]: row
+        for row in takeoffs.filter(plan_sheet__isnull=False)
+        .values("plan_sheet_id")
+        .annotate(
+            total_items=Count("id"),
+            pending_items=Count("id", filter=Q(review_state=TakeoffItem.ReviewState.PENDING)),
+            accepted_items=Count("id", filter=Q(review_state=TakeoffItem.ReviewState.ACCEPTED)),
+            edited_items=Count("id", filter=Q(review_state=TakeoffItem.ReviewState.EDITED)),
+            rejected_items=Count("id", filter=Q(review_state=TakeoffItem.ReviewState.REJECTED)),
+            linked_annotation_items=Count(
+                "id",
+                filter=Q(source_annotation__isnull=False) | Q(linked_annotation__isnull=False),
+            ),
+        )
+    }
+    sheet_category_rows = (
+        takeoffs.filter(plan_sheet__isnull=False)
+        .values("plan_sheet_id", "category", "unit")
+        .annotate(item_count=Count("id"), quantity_total=Coalesce(Sum("quantity"), zero_decimal))
+        .order_by("plan_sheet_id", "-item_count", "category", "unit")
+    )
+    top_categories_by_sheet: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in sheet_category_rows:
+        sheet_id = str(row["plan_sheet_id"])
+        if len(top_categories_by_sheet[sheet_id]) >= 3:
+            continue
+        top_categories_by_sheet[sheet_id].append({
+            "category": row["category"],
+            "unit": row["unit"],
+            "item_count": row["item_count"],
+            "quantity_total": _decimal_to_string(row["quantity_total"]),
+        })
+
+    latest_run_by_sheet: dict[str, AIAnalysisRun] = {}
+    analyzed_sheet_ids: set[str] = set()
+    for run in AIAnalysisRun.objects.filter(plan_set=plan_set).select_related("plan_sheet").order_by("-created_at"):
+        sheet_id = str(run.plan_sheet_id)
+        analyzed_sheet_ids.add(sheet_id)
+        if sheet_id not in latest_run_by_sheet:
+            latest_run_by_sheet[sheet_id] = run
+
+    pending_suggestions_by_sheet = {
+        row["plan_sheet_id"]: row["item_count"]
+        for row in AISuggestion.objects.filter(
+            project=plan_set.project,
+            plan_sheet__plan_set=plan_set,
+            decision_state=AISuggestion.DecisionState.PENDING,
+        )
+        .values("plan_sheet_id")
+        .annotate(item_count=Count("id"))
+    }
+
+    sheet_rollups: list[dict[str, Any]] = []
+    discipline_rollup_map: dict[str, dict[str, Any]] = {}
+    calibrated_sheet_count = 0
+    parsed_sheet_count = 0
+    sheets_with_takeoff_count = 0
+
+    for sheet in plan_sheets:
+        sheet_id = str(sheet.id)
+        rollup = sheet_rollup_rows.get(sheet.id) or {
+            "total_items": 0,
+            "pending_items": 0,
+            "accepted_items": 0,
+            "edited_items": 0,
+            "rejected_items": 0,
+            "linked_annotation_items": 0,
+        }
+        calibrated = _sheet_is_calibrated(sheet)
+        parsed = sheet.parse_status in {PlanSheet.ParseStatus.PARSED, PlanSheet.ParseStatus.INDEXED}
+        latest_run = latest_run_by_sheet.get(sheet_id)
+        pending_suggestions = pending_suggestions_by_sheet.get(sheet.id, 0)
+
+        if calibrated:
+            calibrated_sheet_count += 1
+        if parsed:
+            parsed_sheet_count += 1
+        if rollup["total_items"] > 0:
+            sheets_with_takeoff_count += 1
+
+        discipline_key = (sheet.discipline or "Unassigned").strip() or "Unassigned"
+        if discipline_key not in discipline_rollup_map:
+            discipline_rollup_map[discipline_key] = {
+                "discipline": discipline_key,
+                "sheet_count": 0,
+                "calibrated_sheet_count": 0,
+                "parsed_sheet_count": 0,
+                "analyzed_sheet_count": 0,
+                "takeoff_total_items": 0,
+                "pending_items": 0,
+                "pending_suggestions": 0,
+            }
+        discipline_rollup = discipline_rollup_map[discipline_key]
+        discipline_rollup["sheet_count"] += 1
+        discipline_rollup["calibrated_sheet_count"] += 1 if calibrated else 0
+        discipline_rollup["parsed_sheet_count"] += 1 if parsed else 0
+        discipline_rollup["analyzed_sheet_count"] += 1 if latest_run is not None else 0
+        discipline_rollup["takeoff_total_items"] += rollup["total_items"]
+        discipline_rollup["pending_items"] += rollup["pending_items"]
+        discipline_rollup["pending_suggestions"] += pending_suggestions
+
+        sheet_rollups.append({
+            "id": sheet_id,
+            "title": sheet.title,
+            "sheet_number": sheet.sheet_number,
+            "discipline": sheet.discipline,
+            "file_type": plan_file_type_from_storage_key(sheet.storage_key),
+            "parse_status": sheet.parse_status,
+            "calibrated": calibrated,
+            "total_items": rollup["total_items"],
+            "pending_items": rollup["pending_items"],
+            "accepted_items": rollup["accepted_items"],
+            "edited_items": rollup["edited_items"],
+            "rejected_items": rollup["rejected_items"],
+            "linked_annotation_items": rollup["linked_annotation_items"],
+            "pending_suggestions": pending_suggestions,
+            "latest_analysis_status": latest_run.status if latest_run is not None else None,
+            "latest_analysis_at": _dashboard_timestamp(
+                latest_run.completed_at or latest_run.started_at or latest_run.created_at
+            )
+            if latest_run is not None
+            else None,
+            "top_categories": top_categories_by_sheet.get(sheet_id, []),
+        })
+
+    unassigned_summary = build_takeoff_summary(takeoffs.filter(plan_sheet__isnull=True))
+    latest_snapshot = plan_set.revision_snapshots.order_by("-created_at").first()
+    latest_export = plan_set.export_records.order_by("-created_at").first()
+
+    return {
+        "plan_set_id": str(plan_set.id),
+        "plan_set_name": plan_set.name,
+        "plan_set_status": plan_set.status,
+        "version_label": plan_set.version_label,
+        "summary": summary,
+        "coverage": {
+            "total_sheet_count": len(plan_sheets),
+            "calibrated_sheet_count": calibrated_sheet_count,
+            "parsed_sheet_count": parsed_sheet_count,
+            "analyzed_sheet_count": len(analyzed_sheet_ids),
+            "sheets_with_takeoff_count": sheets_with_takeoff_count,
+            "pending_suggestion_count": sum(pending_suggestions_by_sheet.values()),
+            "unassigned_takeoff_items": unassigned_summary["total_items"],
+        },
+        "discipline_rollups": sorted(
+            discipline_rollup_map.values(),
+            key=lambda row: (-row["takeoff_total_items"], row["discipline"].lower()),
+        ),
+        "sheet_rollups": sorted(
+            sheet_rollups,
+            key=lambda row: (
+                -row["pending_items"],
+                -row["pending_suggestions"],
+                -row["total_items"],
+                (row["sheet_number"] or row["title"] or row["id"]).lower(),
+            ),
+        ),
+        "unassigned_summary": unassigned_summary,
+        "latest_snapshot": {
+            "id": str(latest_snapshot.id),
+            "name": latest_snapshot.name,
+            "status": latest_snapshot.status,
+            "created_at": _dashboard_timestamp(latest_snapshot.created_at),
+        }
+        if latest_snapshot is not None
+        else None,
+        "latest_export": {
+            "id": str(latest_export.id),
+            "export_type": latest_export.export_type,
+            "status": latest_export.status,
+            "created_at": _dashboard_timestamp(latest_export.created_at),
+        }
+        if latest_export is not None
+        else None,
     }
 
 

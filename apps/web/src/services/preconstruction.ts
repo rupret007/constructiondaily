@@ -5,6 +5,7 @@ import type {
   AnnotationItem,
   AnnotationLayer,
   ExportRecord,
+  PlanSetEstimatingDashboard,
   PreconstructionCopilotResponse,
   PlanSet,
   PlanSheetCadPreview,
@@ -251,6 +252,19 @@ export async function fetchTakeoffSummary(
   filters?: TakeoffQueryFilters
 ): Promise<TakeoffSummary> {
   return apiRequest<TakeoffSummary>(`${P}/takeoff/summary/?${buildTakeoffQuery(planSetId, planSheetId, filters)}`);
+}
+
+export async function fetchPlanSetEstimatingDashboard(
+  planSetId: string,
+  filters?: TakeoffQueryFilters
+): Promise<PlanSetEstimatingDashboard> {
+  const params = new URLSearchParams({ plan_set: planSetId });
+  if (filters?.category) params.set("category", filters.category);
+  if (filters?.source) params.set("source", filters.source);
+  if (filters?.review_state) params.set("review_state", filters.review_state);
+  if (filters?.bid_package) params.set("bid_package", filters.bid_package);
+  if (filters?.cost_code) params.set("cost_code", filters.cost_code);
+  return apiRequest<PlanSetEstimatingDashboard>(`${P}/takeoff/dashboard/?${params.toString()}`);
 }
 
 export async function createTakeoffItem(payload: {

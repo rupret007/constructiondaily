@@ -9,6 +9,7 @@ import {
   uploadPlanSheet,
 } from "../services/preconstruction";
 import type { PlanSet as PlanSetType, PlanSheet as PlanSheetType, Project } from "../types/api";
+import { PlanSetEstimatingDashboard } from "./PlanSetEstimatingDashboard";
 import { PreconstructionCopilotPanel } from "./PreconstructionCopilotPanel";
 import { ProjectDocumentPanel } from "./ProjectDocumentPanel";
 import { PlanSetList } from "./PlanSetList";
@@ -41,6 +42,7 @@ export function PreconstructionDashboard({
   const [uploading, setUploading] = useState(false);
   const [createName, setCreateName] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
 
   const loadPlanSets = useCallback(async () => {
     if (!projectId) {
@@ -113,6 +115,7 @@ export function PreconstructionDashboard({
     try {
       await uploadPlanSheet(selectedPlanSetId, file, { title: title || file.name.replace(/\.(pdf|dxf|dwg)$/i, "") });
       await loadSheets();
+      setDashboardRefreshKey((current) => current + 1);
     } catch (e) {
       onError(e instanceof Error ? e.message : "Failed to upload sheet.");
     } finally {
@@ -217,6 +220,14 @@ export function PreconstructionDashboard({
             )}
           </CardContent>
         </Card>
+        {selectedPlanSetId ? (
+          <PlanSetEstimatingDashboard
+            planSetId={selectedPlanSetId}
+            planSetName={selectedPlanSet?.name}
+            refreshKey={dashboardRefreshKey}
+            onOpenSheet={(sheetId) => onOpenSheet(sheetId, selectedPlanSetId)}
+          />
+        ) : null}
         {projectId ? (
           <ProjectDocumentPanel
             projectId={projectId}

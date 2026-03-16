@@ -37,6 +37,7 @@ from .serializers import (
     AnnotationItemSerializer,
     AnnotationLayerSerializer,
     ExportRecordSerializer,
+    PlanSetEstimatingDashboardSerializer,
     PreconstructionCopilotQuerySerializer,
     PreconstructionCopilotResponseSerializer,
     PlanSetSerializer,
@@ -51,6 +52,7 @@ from .services import (
     accept_suggestion,
     answer_preconstruction_question,
     batch_accept_suggestions,
+    build_plan_set_estimating_dashboard,
     build_takeoff_summary,
     build_snapshot_payload,
     create_takeoff_from_annotation,
@@ -563,6 +565,14 @@ class TakeoffItemViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(project_id__in=_project_ids_for_user(self.request.user))
 
+    def _dashboard_queryset(self, request, plan_set: PlanSet):
+        queryset = self.get_queryset().filter(plan_set=plan_set)
+        for field in ("category", "source", "review_state", "cost_code", "bid_package"):
+            value = request.query_params.get(field)
+            if value:
+                queryset = queryset.filter(**{field: value})
+        return queryset
+
     @action(detail=False, methods=["get"], url_path="summary")
     def summary(self, request):
         if not request.query_params.get("plan_set"):
@@ -572,6 +582,27 @@ class TakeoffItemViewSet(viewsets.ModelViewSet):
             )
         queryset = self.filter_queryset(self.get_queryset())
         return Response(build_takeoff_summary(queryset), status=status.HTTP_200_OK)
+
+    @extend_schema(responses={200: PlanSetEstimatingDashboardSerializer})
+    @action(detail=False, methods=["get"], url_path="dashboard")
+    def dashboard(self, request):
+        plan_set_id = request.query_params.get("plan_set")
+        if not plan_set_id:
+            return Response(
+                {"detail": "plan_set is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        plan_set = get_object_or_404(PlanSet.objects.select_related("project"), id=plan_set_id)
+        if plan_set.project_id not in _project_ids_for_user(request.user):
+            raise PermissionDenied("Insufficient permissions.")
+        payload = build_plan_set_estimating_dashboard(
+            plan_set,
+            queryset=self._dashboard_queryset(request, plan_set),
+        )
+        return Response(
+            PlanSetEstimatingDashboardSerializer(payload).data,
+            status=status.HTTP_200_OK,
+        )
 
     def perform_create(self, serializer):
         project = serializer.validated_data["project"]
