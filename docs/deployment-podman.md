@@ -2,6 +2,26 @@
 
 This guide covers running Construction Daily as a Podman Compose stack (app + Postgres), with optional **immediate deploy** from GitHub Actions and **hourly poll-update** on the server.
 
+## Quick start (local PC)
+
+From the repo root, run:
+
+```batch
+start.bat
+```
+
+That creates `.env` from `.env.example` if needed, builds the app image, and starts the stack. The API is at **http://localhost:8000**. No need to edit `.env` for local dev (defaults are dev-only).
+
+To stop: `podman compose -f infra/podman-compose.yml down`
+
+On Linux/macOS, same steps without the script:
+
+```bash
+cp .env.example .env   # only if .env doesn't exist
+podman compose -f infra/podman-compose.yml build
+podman compose -f infra/podman-compose.yml up -d
+```
+
 ## Stack
 
 - **app:** Django + Gunicorn, built frontend assets, port 8000.
