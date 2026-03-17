@@ -92,6 +92,63 @@ class ProjectMembershipGuardTests(TestCase):
             ).exists()
         )
 
+    def test_non_superuser_cannot_create_project(self):
+        self.client.login(username="pm_admin", password="test-pass")
+        response = self.client.post(
+            "/api/projects/",
+            {
+                "code": "PM-C",
+                "name": "Project C",
+                "location": "C",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_superuser_can_create_project(self):
+        self.client.login(username="pm_root", password="test-pass")
+        response = self.client.post(
+            "/api/projects/",
+            {
+                "code": "PM-C",
+                "name": "Project C",
+                "location": "C",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(Project.objects.filter(code="PM-C").exists())
+
+    def test_user_directory_only_returns_shared_project_members(self):
+        ProjectMembership.objects.create(
+            user=self.other_user,
+            project=self.project_b,
+            role=ProjectMembership.Role.SAFETY,
+        )
+        self.client.login(username="pm_admin", password="test-pass")
+
+        response = self.client.get("/api/projects/users/")
+
+        self.assertEqual(response.status_code, 200)
+        usernames = {entry["username"] for entry in response.json()}
+        self.assertIn("pm_admin", usernames)
+        self.assertIn("pm_manager", usernames)
+        self.assertIn("pm_worker", usernames)
+        self.assertNotIn("pm_other", usernames)
+
+    def test_user_directory_search_does_not_leak_unshared_users(self):
+        ProjectMembership.objects.create(
+            user=self.other_user,
+            project=self.project_b,
+            role=ProjectMembership.Role.SAFETY,
+        )
+        self.client.login(username="pm_admin", password="test-pass")
+
+        response = self.client.get("/api/projects/users/", {"query": "pm_other"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
     def test_project_manager_cannot_create_admin_membership(self):
         self.client.login(username="pm_manager", password="test-pass")
         response = self.client.post(

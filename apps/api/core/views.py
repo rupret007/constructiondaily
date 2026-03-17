@@ -77,6 +77,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Admin role is required.")
 
     def perform_create(self, serializer):
+        if not self.request.user.is_superuser:
+            from rest_framework.exceptions import PermissionDenied
+
+            raise PermissionDenied("Superuser is required.")
         project = serializer.save()
         ProjectMembership.objects.get_or_create(
             user=self.request.user,
@@ -200,9 +204,17 @@ class UserDirectoryViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     ordering_fields = ("username", "first_name", "last_name")
 
     def get_queryset(self):
+        shared_project_ids = ProjectMembership.objects.filter(
+            user=self.request.user,
+            is_active=True,
+        ).values_list("project_id", flat=True)
+        queryset = self.queryset.filter(
+            project_memberships__project_id__in=shared_project_ids,
+            project_memberships__is_active=True,
+        ).distinct()
         query = self.request.query_params.get("query")
         if not query:
-            return self.queryset.order_by("username")[:50]
-        return self.queryset.filter(
+            return queryset.order_by("username")[:50]
+        return queryset.filter(
             Q(username__icontains=query) | Q(first_name__icontains=query) | Q(last_name__icontains=query)
         ).order_by("username")[:50]
