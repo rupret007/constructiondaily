@@ -75,7 +75,7 @@ test("preconstruction: upload sheet, open viewer, run analysis, copilot, snapsho
   ).toBeVisible({ timeout: 15000 });
 
   await page.getByRole("button", { name: "Create snapshot", exact: true }).click();
-  await expect(page.getByText(/Snapshot \d{4}-\d{2}-\d{2}|Draft/)).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText(/Snapshot \d{4}-\d{2}-\d{2}|Draft/).first()).toBeVisible({ timeout: 10000 });
 
   await page.getByRole("button", { name: "Export JSON", exact: true }).click();
   await expect(page.getByText(/plan_set_id|sheets|captured_at/).first()).toBeVisible({ timeout: 10000 });
