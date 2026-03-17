@@ -22,32 +22,30 @@ When it finishes, the app is running at **http://localhost:8000**. If Podman isn
 
 ## 2. Create a user (first time only)
 
-You need at least one user to log in. Choose one of these.
+You need one user to log in. The app uses username + password (no passwordless option yet).
 
-### Option A: Quick demo users (easiest)
+### Option A: One-step demo (easiest)
 
-Creates a project and three users (all use the same password):
+Creates one user and one project. Then sign in with:
+
+- **Username:** `admin`  
+- **Password:** `admin`
 
 ```batch
-podman compose -f infra/podman-compose.yml exec app python manage.py seed_e2e_data
+podman compose -f infra/podman-compose.yml exec app python manage.py seed_simple
 ```
 
-Then sign in at http://localhost:8000 with:
+For a different username/password: `seed_simple --username demo --password demo`
 
-- **Username:** `e2e_pm`  
-- **Password:** `e2e-pass-123`
+### Option B: Your own user
 
-Other demo users: `e2e_super`, `e2e_admin` (same password). They have different roles on the seeded project.
-
-### Option B: Your own admin user
-
-Create a superuser and set the password when prompted:
+Create a superuser and choose any password (for local use you can keep it short, e.g. `admin`):
 
 ```batch
 podman compose -f infra/podman-compose.yml exec app python manage.py createsuperuser
 ```
 
-Then sign in with the username and password you chose. To use **Preconstruction**, create a project in the app (or use the Django admin at http://localhost:8000/admin/) and add your user to the project with a role (e.g. Project Manager).
+Then sign in with what you chose. To use **Preconstruction**, add your user to a project (Django admin at http://localhost:8000/admin/ or create a project in the app).
 
 ## 3. Sign in
 
