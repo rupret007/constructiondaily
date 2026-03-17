@@ -521,3 +521,39 @@ class ExportRecord(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.plan_set.name} - {self.export_type} ({self.status})"
+
+
+class ProjectTakeoffRule(TimeStampedModel):
+    """
+    Project-level rule for expanding a takeoff category into multiple rows (e.g. door → doors + door_hardware).
+    When a takeoff is created with a matching trigger_category (and optional trigger_label_pattern),
+    the primary row is created plus extra rows from expansion_components.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="takeoff_rules",
+    )
+    name = models.CharField(max_length=128, help_text="Short label for this rule (e.g. Door set).")
+    trigger_category = models.CharField(
+        max_length=64,
+        help_text="TakeoffItem category that triggers this rule (e.g. doors).",
+    )
+    trigger_label_pattern = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Optional regex on annotation/suggestion label; blank means any label.",
+    )
+    expansion_components = models.JSONField(
+        default=list,
+        help_text='List of {"category", "unit", "quantity_mode": "same"|"one"} to add per primary item.',
+    )
+
+    class Meta:
+        ordering = ("trigger_category", "name")
+        unique_together = [("project", "trigger_category", "name")]
+
+    def __str__(self) -> str:
+        return f"{self.project.code} – {self.name} ({self.trigger_category})"

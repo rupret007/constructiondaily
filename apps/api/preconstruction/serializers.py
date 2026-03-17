@@ -19,6 +19,7 @@ from .models import (
     PlanSet,
     PlanSheet,
     ProjectDocument,
+    ProjectTakeoffRule,
     RevisionSnapshot,
     TakeoffItem,
 )
@@ -643,3 +644,19 @@ class ExportRecordSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = ("storage_key", "metadata_json", "created_at")
+
+
+class ProjectTakeoffRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectTakeoffRule
+        fields = (
+            "id",
+            "project",
+            "name",
+            "trigger_category",
+            "trigger_label_pattern",
+            "expansion_components",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("created_at", "updated_at")

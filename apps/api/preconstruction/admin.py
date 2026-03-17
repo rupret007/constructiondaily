@@ -4,6 +4,7 @@ from .models import (
     PlanSheet,
     ProjectDocument,
     ProjectDocumentChunk,
+    ProjectTakeoffRule,
     AnnotationLayer,
     AnnotationItem,
     TakeoffItem,
@@ -81,3 +82,10 @@ class RevisionSnapshotAdmin(admin.ModelAdmin):
 class ExportRecordAdmin(admin.ModelAdmin):
     list_display = ("plan_set", "export_type", "status", "created_at")
     list_filter = ("export_type", "status")
+
+
+@admin.register(ProjectTakeoffRule)
+class ProjectTakeoffRuleAdmin(admin.ModelAdmin):
+    list_display = ("name", "project", "trigger_category", "trigger_label_pattern")
+    list_filter = ("project", "trigger_category")
+    search_fields = ("name", "trigger_category")

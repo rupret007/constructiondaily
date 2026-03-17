@@ -26,6 +26,7 @@ from preconstruction.models import (
     PlanSheet,
     ProjectDocument,
     ProjectDocumentChunk,
+    ProjectTakeoffRule,
     RevisionSnapshot,
     TakeoffItem,
 )
@@ -33,6 +34,7 @@ from preconstruction.services import (
     accept_suggestion,
     batch_accept_suggestions,
     build_snapshot_payload,
+    compute_snapshot_diff,
     reject_suggestion,
     run_plan_analysis,
 )
@@ -2534,6 +2536,213 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(exp_doors["review_state"], "edited")
         self.assertEqual(exp_sheet["ai_suggestion_outcomes"][0]["decision_state"], "edited")
 
+    def test_snapshot_diff_snapshot_vs_current(self):
+        """Diff between a snapshot and current live state returns takeoff and suggestion deltas."""
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        payload_v1 = build_snapshot_payload(plan_set)
+        snap = RevisionSnapshot.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            name="v1",
+            status=RevisionSnapshot.Status.DRAFT,
+            snapshot_payload_json=payload_v1,
+            created_by=self.user,
+        )
+        TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity=2,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        payload_current = build_snapshot_payload(plan_set)
+        diff = compute_snapshot_diff(snap.snapshot_payload_json, payload_current)
+        self.assertIn("takeoff_added", diff)
+        self.assertIn("takeoff_removed", diff)
+        self.assertIn("takeoff_changed", diff)
+        self.assertIn("suggestion_summary", diff)
+        added = [r for r in diff["takeoff_added"] if r["category"] == "doors" and r["unit"] == "count"]
+        self.assertEqual(len(added), 1)
+        self.assertEqual(added[0]["quantity"], "2.0000")
+
+    def test_snapshot_diff_api(self):
+        """GET snapshots/diff/?left=<id>&right=current returns 200 and structured diff."""
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        snap = RevisionSnapshot.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            name="v1",
+            status=RevisionSnapshot.Status.DRAFT,
+            snapshot_payload_json=build_snapshot_payload(plan_set),
+            created_by=self.user,
+        )
+        resp = self.client.get(
+            "/api/preconstruction/snapshots/diff/",
+            {"left": str(snap.id), "right": "current"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("takeoff_added", data)
+        self.assertIn("takeoff_removed", data)
+        self.assertIn("takeoff_changed", data)
+        self.assertIn("suggestion_summary", data)
+
+    def test_project_takeoff_rule_expansion(self):
+        """When a project has a takeoff rule for doors, accept suggestion uses rule expansion instead of built-in."""
+        self.client.login(username="estimator1", password="test-pass")
+        ProjectTakeoffRule.objects.create(
+            project=self.project,
+            name="Door set",
+            trigger_category="doors",
+            trigger_label_pattern="",
+            expansion_components=[
+                {"category": "door_hardware", "unit": "each", "quantity_mode": "one"},
+            ],
+        )
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 200)
+        takeoff_items = TakeoffItem.objects.filter(plan_sheet=plan_sheet).order_by("category")
+        self.assertEqual(takeoff_items.count(), 2)
+        categories = list(takeoff_items.values_list("category", flat=True))
+        self.assertIn("doors", categories)
+        self.assertIn("door_hardware", categories)
+        door_hardware = takeoff_items.get(category="door_hardware")
+        self.assertEqual(door_hardware.unit, "each")
+        self.assertEqual(door_hardware.quantity, 1)
+
+    def test_feedback_export_returns_suggestion_outcomes(self):
+        """GET suggestions/feedback_export/?project= returns list of suggestion outcomes for calibration."""
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            label="Door",
+            rationale="Mock",
+            confidence=0.85,
+            decision_state=AISuggestion.DecisionState.ACCEPTED,
+        )
+        ann = AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=plan_sheet,
+            layer=AnnotationLayer.objects.create(
+                project=self.project,
+                plan_set=plan_set,
+                plan_sheet=plan_sheet,
+                name="Default",
+                created_by=self.user,
+            ),
+            annotation_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0, "y": 0, "width": 0.1, "height": 0.1},
+            label="Door",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        takeoff = TakeoffItem.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            category=TakeoffItem.Category.DOORS,
+            unit=TakeoffItem.Unit.COUNT,
+            quantity=1,
+            source_annotation=ann,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        suggestion.accepted_annotation = ann
+        suggestion.save(update_fields=["accepted_annotation"])
+        resp = self.client.get(
+            "/api/preconstruction/suggestions/feedback_export/",
+            {"project": str(self.project.id)},
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIsInstance(data, list)
+        self.assertGreaterEqual(len(data), 1)
+        row = next(r for r in data if r["id"] == str(suggestion.id))
+        self.assertEqual(row["decision_state"], "accepted")
+        self.assertEqual(row["accepted_category"], "doors")
+        self.assertEqual(row["accepted_unit"], "count")
+        self.assertEqual(row["accepted_quantity"], "1.0000")
+
     def test_snapshot_lock(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(
@@ -2597,7 +2806,7 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(export_resp.status_code, 400)
         self.assertEqual(ExportRecord.objects.filter(plan_set=plan_set).count(), 0)
 
-    def test_export_pdf_metadata_placeholder(self):
+    def test_export_pdf_returns_generated_pdf(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(
             project=self.project,
@@ -2610,12 +2819,12 @@ class PreconstructionAPITests(TestCase):
             {"plan_set": str(plan_set.id), "export_type": "pdf_metadata"},
             format="json",
         )
-        self.assertEqual(export_resp.status_code, 201)
-        self.assertIn("payload", export_resp.json())
-        payload = export_resp.json()["payload"]
-        self.assertIn("message", payload)
-        self.assertIn("plan_set_id", payload)
-        self.assertEqual(payload["plan_set_id"], str(plan_set.id))
+        self.assertEqual(export_resp.status_code, 200)
+        self.assertEqual(export_resp.get("Content-Type", ""), "application/pdf")
+        self.assertTrue(
+            export_resp.content.startswith(b"%PDF"),
+            "Response body should be PDF bytes",
+        )
         record = ExportRecord.objects.get(plan_set=plan_set, export_type="pdf_metadata")
         self.assertEqual(record.status, ExportRecord.Status.GENERATED)
 

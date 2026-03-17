@@ -29,6 +29,7 @@ from .models import (
     PlanSet,
     PlanSheet,
     ProjectDocument,
+    ProjectTakeoffRule,
     RevisionSnapshot,
     TakeoffItem,
 )
@@ -803,8 +804,42 @@ def _expand_takeoff_components(
     quantity: Decimal,
     label: str | None,
     assembly_profile: str,
+    project_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     profile = _normalize_assembly_profile(assembly_profile)
+
+    # Project-level rules take precedence when project_id is provided.
+    if project_id:
+        label_str = (label or "").strip()
+        for rule in ProjectTakeoffRule.objects.filter(
+            project_id=project_id,
+            trigger_category=category,
+        ):
+            if rule.trigger_label_pattern and not re.search(
+                rule.trigger_label_pattern, label_str, re.IGNORECASE
+            ):
+                continue
+            components = [
+                {
+                    "category": category,
+                    "unit": unit,
+                    "quantity": _normalize_estimator_quantity(quantity, unit),
+                    "notes_suffix": "Primary quantity",
+                }
+            ]
+            for comp in rule.expansion_components or []:
+                ccat = comp.get("category") or TakeoffItem.Category.CUSTOM
+                cunit = comp.get("unit") or TakeoffItem.Unit.EACH
+                qty_mode = comp.get("quantity_mode") or "same"
+                qty = quantity if qty_mode == "same" else Decimal("1")
+                components.append({
+                    "category": ccat,
+                    "unit": cunit,
+                    "quantity": _normalize_estimator_quantity(qty, cunit),
+                    "notes_suffix": f"Rule: {rule.name}",
+                })
+            return components, f"rule:{rule.name}"
+
     if profile == ASSEMBLY_PROFILE_AUTO:
         profile = _detect_assembly_profile(category, label) or ASSEMBLY_PROFILE_NONE
 
@@ -827,10 +862,8 @@ def _expand_takeoff_components(
             }
         )
     elif profile == ASSEMBLY_PROFILE_WINDOW_SET:
-        # Window assemblies are represented by the primary line item only in v1.
         pass
     elif profile == ASSEMBLY_PROFILE_FIXTURE_SET:
-        # Fixture assemblies are represented by the primary line item only in v1.
         pass
 
     return components, profile
@@ -950,6 +983,7 @@ def accept_suggestion(
             quantity=qty,
             label=final_label,
             assembly_profile=assembly_profile,
+            project_id=str(plan_sheet.project_id),
         )
         if not components:
             raise ValueError("No takeoff components were generated.")
@@ -1066,6 +1100,7 @@ def create_takeoff_from_annotation(
             quantity=estimated_quantity,
             label=annotation.label,
             assembly_profile=assembly_profile,
+            project_id=str(plan_sheet.project_id),
         )
         if not components:
             raise ValueError("No takeoff components were generated.")
@@ -1871,22 +1906,51 @@ def _answer_snapshot_question(project, snapshots, plan_set: PlanSet | None, plan
         row["status"]: row["item_count"]
         for row in snapshots.values("status").annotate(item_count=Count("id")).order_by("status")
     }
+
+    if _contains_any(question_lower, ("compare", "changed", "difference")) and plan_set is not None:
+        left_payload = latest_snapshot.snapshot_payload_json or {}
+        right_payload = build_snapshot_payload(plan_set)
+        diff = compute_snapshot_diff(left_payload, right_payload)
+        added = len(diff.get("takeoff_added", []))
+        removed = len(diff.get("takeoff_removed", []))
+        changed = len(diff.get("takeoff_changed", []))
+        sugg = diff.get("suggestion_summary", [])
+        answer = (
+            f"Compared snapshot **{latest_snapshot.name}** to current state in {scope_label}. "
+            f"Takeoff: {added} row(s) added, {removed} removed, {changed} quantity change(s). "
+        )
+        if sugg:
+            parts = [f"{s.get('decision_state', '')} {s.get('left_count', 0)}→{s.get('right_count', 0)}" for s in sugg[:5]]
+            answer += f" Suggestion decision changes: {', '.join(parts)}."
+        if not added and not removed and not changed and not sugg:
+            answer += " No takeoff or suggestion decision changes."
+        status = "grounded"
+        citations = [
+            _build_copilot_citation(
+                "snapshot_diff",
+                str(latest_snapshot.id),
+                latest_snapshot.name,
+                f"Diff vs current: +{added} −{removed} Δ{changed} takeoff, {len(sugg)} suggestion state change(s).",
+            )
+        ]
+        return _build_copilot_result(
+            status=status,
+            answer=answer,
+            project=project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            citations=citations,
+        )
+
     answer = (
         f"I found {snapshot_count} revision snapshot{'s' if snapshot_count != 1 else ''} in {scope_label}. "
         f"The latest is {latest_snapshot.name} with status {_choice_label(RevisionSnapshot.Status, latest_snapshot.status).lower()} "
-        f"created at {_format_timestamp(latest_snapshot.created_at)}."
+        f"created at {_format_timestamp(latest_snapshot.created_at)}. "
+        f"Snapshot status counts in scope are draft {status_counts.get(RevisionSnapshot.Status.DRAFT, 0)}, "
+        f"submitted {status_counts.get(RevisionSnapshot.Status.SUBMITTED, 0)}, approved {status_counts.get(RevisionSnapshot.Status.APPROVED, 0)}, "
+        f"and locked {status_counts.get(RevisionSnapshot.Status.LOCKED, 0)}."
     )
-    if _contains_any(question_lower, ("compare", "changed", "difference")):
-        answer += " I can report snapshot presence and status now, but structured revision diffing is still a later phase."
-        status = "limited"
-    else:
-        answer += (
-            f" Snapshot status counts in scope are draft {status_counts.get(RevisionSnapshot.Status.DRAFT, 0)}, "
-            f"submitted {status_counts.get(RevisionSnapshot.Status.SUBMITTED, 0)}, approved {status_counts.get(RevisionSnapshot.Status.APPROVED, 0)}, "
-            f"and locked {status_counts.get(RevisionSnapshot.Status.LOCKED, 0)}."
-        )
-        status = "grounded"
-
+    status = "grounded"
     citations = [
         _build_copilot_citation(
             "snapshot",
@@ -2334,6 +2398,116 @@ def build_snapshot_payload(plan_set: PlanSet) -> dict[str, Any]:
     }
 
 
+def compute_snapshot_diff(
+    left_payload: dict[str, Any],
+    right_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Compare two snapshot payloads and return a structured diff for takeoff and AI suggestion outcomes.
+    Keys for takeoff: (sheet_id, category, unit). Quantities are summed per key; then added/removed/changed.
+    Suggestions: per-sheet counts by decision_state and a short summary.
+    """
+    def _takeoff_rows(payload: dict) -> list[dict]:
+        rows = []
+        for sheet in payload.get("sheets", []):
+            sid = sheet.get("id")
+            for t in sheet.get("takeoff_items", []):
+                rows.append({
+                    "sheet_id": sid,
+                    "sheet_title": sheet.get("title") or "",
+                    "category": t.get("category", ""),
+                    "unit": t.get("unit", ""),
+                    "quantity": Decimal(t.get("quantity") or "0"),
+                })
+        for t in payload.get("plan_set_level_takeoff", []):
+            rows.append({
+                "sheet_id": "",
+                "sheet_title": "(plan set)",
+                "category": t.get("category", ""),
+                "unit": t.get("unit", ""),
+                "quantity": Decimal(t.get("quantity") or "0"),
+            })
+        return rows
+
+    def _aggregate_by_key(rows: list[dict]) -> dict[tuple[str, str, str], Decimal]:
+        agg: dict[tuple[str, str, str], Decimal] = defaultdict(Decimal)
+        for r in rows:
+            key = (r["sheet_id"], r["category"], r["unit"])
+            agg[key] += r["quantity"]
+        return dict(agg)
+
+    def _suggestion_counts_by_sheet(payload: dict) -> dict[str, dict[str, int]]:
+        by_sheet: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        for sheet in payload.get("sheets", []):
+            sid = sheet.get("id")
+            for s in sheet.get("ai_suggestion_outcomes", []):
+                state = s.get("decision_state") or "pending"
+                by_sheet[sid][state] = by_sheet[sid][state] + 1
+        return dict(by_sheet)
+
+    left_rows = _takeoff_rows(left_payload)
+    right_rows = _takeoff_rows(right_payload)
+    left_agg = _aggregate_by_key(left_rows)
+    right_agg = _aggregate_by_key(right_rows)
+
+    all_keys = set(left_agg) | set(right_agg)
+    takeoff_added: list[dict[str, Any]] = []
+    takeoff_removed: list[dict[str, Any]] = []
+    takeoff_changed: list[dict[str, Any]] = []
+
+    sheet_titles: dict[str, str] = {}
+    for sheet in left_payload.get("sheets", []) + right_payload.get("sheets", []):
+        sheet_titles[sheet.get("id", "")] = sheet.get("title") or ""
+
+    for key in all_keys:
+        sheet_id, category, unit = key
+        left_qty = left_agg.get(key, Decimal("0"))
+        right_qty = right_agg.get(key, Decimal("0"))
+        title = sheet_titles.get(sheet_id) or ("(plan set)" if not sheet_id else "")
+        row = {"sheet_id": sheet_id, "sheet_title": title, "category": category, "unit": unit}
+        if left_qty == 0 and right_qty != 0:
+            row["quantity"] = str(right_qty)
+            takeoff_added.append(row)
+        elif left_qty != 0 and right_qty == 0:
+            row["quantity"] = str(left_qty)
+            takeoff_removed.append(row)
+        elif left_qty != right_qty:
+            row["quantity_left"] = str(left_qty)
+            row["quantity_right"] = str(right_qty)
+            row["quantity_delta"] = str(right_qty - left_qty)
+            takeoff_changed.append(row)
+
+    left_sugg = _suggestion_counts_by_sheet(left_payload)
+    right_sugg = _suggestion_counts_by_sheet(right_payload)
+    all_sheet_ids = set(left_sugg) | set(right_sugg)
+    suggestion_summary: list[dict[str, Any]] = []
+    for sid in sorted(all_sheet_ids):
+        lc = left_sugg.get(sid, {})
+        rc = right_sugg.get(sid, {})
+        title = sheet_titles.get(sid) or sid[:8]
+        for state in ("pending", "accepted", "edited", "rejected"):
+            lv = lc.get(state, 0)
+            rv = rc.get(state, 0)
+            if lv != rv:
+                suggestion_summary.append({
+                    "sheet_id": sid,
+                    "sheet_title": title,
+                    "decision_state": state,
+                    "left_count": lv,
+                    "right_count": rv,
+                    "delta": rv - lv,
+                })
+
+    return {
+        "takeoff_added": takeoff_added,
+        "takeoff_removed": takeoff_removed,
+        "takeoff_changed": takeoff_changed,
+        "suggestion_summary": suggestion_summary,
+        "left_captured_at": left_payload.get("captured_at"),
+        "right_captured_at": right_payload.get("captured_at"),
+    }
+
+
 # ----- Export -----
 
 def create_export(
@@ -2386,15 +2560,9 @@ def create_export(
         csv_str = buf.getvalue()
         return csv_str, None
     elif export_type == ExportRecord.ExportType.PDF_METADATA:
-        # Placeholder: true PDF generation not implemented; record metadata for audit.
-        placeholder = {
-            "message": "PDF export not implemented; metadata only.",
-            "plan_set_id": str(plan_set.id),
-            "plan_set_name": plan_set.name,
-            "sheet_count": len(payload.get("sheets", [])),
-            "captured_at": payload.get("captured_at"),
-        }
-        return placeholder, None
+        from .pdf_export import build_takeoff_pdf
+        pdf_bytes = build_takeoff_pdf(plan_set, payload)
+        return pdf_bytes, None
     else:
         return payload, None
 

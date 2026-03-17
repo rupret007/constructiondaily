@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
+
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
@@ -28,6 +30,7 @@ from .models import (
     PlanSet,
     PlanSheet,
     ProjectDocument,
+    ProjectTakeoffRule,
     RevisionSnapshot,
     TakeoffItem,
 )
@@ -46,6 +49,7 @@ from .serializers import (
     ProjectDocumentCreateSerializer,
     ProjectDocumentSerializer,
     RevisionSnapshotSerializer,
+    ProjectTakeoffRuleSerializer,
     TakeoffItemSerializer,
 )
 from .services import (
@@ -53,11 +57,12 @@ from .services import (
     answer_preconstruction_question,
     batch_accept_suggestions,
     build_plan_set_estimating_dashboard,
-    build_takeoff_summary,
     build_snapshot_payload,
-    create_takeoff_from_annotation,
+    build_takeoff_summary,
+    compute_snapshot_diff,
     create_export,
     create_export_record,
+    create_takeoff_from_annotation,
     reject_suggestion,
     run_plan_analysis,
 )
@@ -785,6 +790,93 @@ class AISuggestionViewSet(viewsets.ModelViewSet):
         suggestion.refresh_from_db()
         return Response(self.get_serializer(suggestion).data)
 
+    @extend_schema(
+        parameters=[
+            {"name": "project", "in": "query", "required": True, "schema": {"type": "string", "format": "uuid"}},
+            {"name": "plan_set", "in": "query", "required": False, "schema": {"type": "string", "format": "uuid"}},
+        ],
+        responses={200: {"description": "List of suggestion outcomes for calibration (labeled data)."}},
+    )
+    @action(detail=False, methods=["get"], url_path="feedback_export")
+    def feedback_export(self, request):
+        """Export AI suggestion outcomes (accept/edit/reject) for calibration or evaluation."""
+        project_id = request.query_params.get("project")
+        if not project_id:
+            return Response(
+                {"detail": "Query param 'project' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            project_uuid = uuid.UUID(project_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid project id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if project_uuid not in _project_ids_for_user(request.user):
+            raise PermissionDenied("Insufficient permissions.")
+        qs = AISuggestion.objects.filter(project_id=project_uuid).select_related(
+            "plan_sheet", "accepted_annotation"
+        ).order_by("created_at")
+        if request.query_params.get("plan_set"):
+            qs = qs.filter(analysis_run__plan_set_id=request.query_params.get("plan_set"))
+        rows = []
+        for s in qs:
+            row = {
+                "id": str(s.id),
+                "plan_sheet_id": str(s.plan_sheet_id),
+                "label": s.label,
+                "suggestion_type": s.suggestion_type,
+                "decision_state": s.decision_state,
+                "confidence": float(s.confidence) if s.confidence is not None else None,
+                "decided_at": s.decided_at.isoformat() if s.decided_at else None,
+            }
+            if s.accepted_annotation_id:
+                takeoff = TakeoffItem.objects.filter(
+                    source_annotation_id=s.accepted_annotation_id
+                ).first()
+                if takeoff:
+                    row["accepted_category"] = takeoff.category
+                    row["accepted_unit"] = takeoff.unit
+                    row["accepted_quantity"] = str(takeoff.quantity)
+            rows.append(row)
+        return Response(rows)
+
+
+class ProjectTakeoffRuleViewSet(viewsets.ModelViewSet):
+    serializer_class = ProjectTakeoffRuleSerializer
+    queryset = ProjectTakeoffRule.objects.select_related("project")
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ("project", "trigger_category")
+    ordering_fields = ("trigger_category", "name")
+
+    def get_queryset(self):
+        return self.queryset.filter(project_id__in=_project_ids_for_user(self.request.user))
+
+    def perform_create(self, serializer):
+        project = serializer.validated_data["project"]
+        if not user_has_project_role(self.request.user, str(project.id), PROJECT_WRITE_ROLES):
+            raise PermissionDenied("Insufficient permissions.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        if not user_has_project_role(
+            self.request.user,
+            str(serializer.instance.project_id),
+            PROJECT_WRITE_ROLES,
+        ):
+            raise PermissionDenied("Insufficient permissions.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not user_has_project_role(
+            self.request.user,
+            str(instance.project_id),
+            PROJECT_WRITE_ROLES,
+        ):
+            raise PermissionDenied("Insufficient permissions.")
+        instance.delete()
+
 
 class RevisionSnapshotViewSet(viewsets.ModelViewSet):
     serializer_class = RevisionSnapshotSerializer
@@ -845,6 +937,44 @@ class RevisionSnapshotViewSet(viewsets.ModelViewSet):
             )
         return Response(self.get_serializer(snapshot).data)
 
+    @extend_schema(
+        parameters=[
+            {"name": "left", "in": "query", "required": True, "schema": {"type": "string"}, "description": "Snapshot ID (left side)."},
+            {"name": "right", "in": "query", "required": True, "schema": {"type": "string"}, "description": "Snapshot ID or 'current' for live state (right side)."},
+        ],
+        responses={200: {"description": "Structured diff of takeoff and suggestion outcomes."}},
+    )
+    @action(detail=False, methods=["get"], url_path="diff")
+    def diff(self, request):
+        left_id = request.query_params.get("left")
+        right_param = request.query_params.get("right")
+        if not left_id or not right_param:
+            return Response(
+                {"detail": "Query params 'left' and 'right' are required. Use 'current' for right to compare to live state."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        left_snapshot = get_object_or_404(RevisionSnapshot, pk=left_id)
+        if left_snapshot.project_id not in _project_ids_for_user(request.user):
+            raise PermissionDenied("Insufficient permissions.")
+        left_payload = left_snapshot.snapshot_payload_json or {}
+        if right_param.strip().lower() == "current":
+            plan_set = left_snapshot.plan_set
+            if plan_set.project_id not in _project_ids_for_user(request.user):
+                raise PermissionDenied("Insufficient permissions.")
+            right_payload = build_snapshot_payload(plan_set)
+        else:
+            right_snapshot = get_object_or_404(RevisionSnapshot, pk=right_param)
+            if right_snapshot.project_id not in _project_ids_for_user(request.user):
+                raise PermissionDenied("Insufficient permissions.")
+            if right_snapshot.plan_set_id != left_snapshot.plan_set_id:
+                return Response(
+                    {"detail": "Both snapshots must belong to the same plan set."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            right_payload = right_snapshot.snapshot_payload_json or {}
+        result = compute_snapshot_diff(left_payload, right_payload)
+        return Response(result)
+
 
 class ExportRecordViewSet(viewsets.ModelViewSet):
     serializer_class = ExportRecordSerializer
@@ -895,12 +1025,16 @@ class ExportRecordViewSet(viewsets.ModelViewSet):
             revision_snapshot=revision_snapshot,
             storage_key=storage_key or "",
         )
+        if export_type == ExportRecord.ExportType.PDF_METADATA:
+            safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in (plan_set.name or "takeoff"))
+            filename = f"takeoff-{safe_name}.pdf"
+            resp = HttpResponse(payload, content_type="application/pdf", status=200)
+            resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+            return resp
         serializer = self.get_serializer(record)
         resp = Response(serializer.data, status=status.HTTP_201_CREATED)
         if export_type == ExportRecord.ExportType.JSON:
             resp.data["payload"] = payload
         elif export_type == ExportRecord.ExportType.CSV:
-            resp.data["payload"] = payload
-        elif export_type == ExportRecord.ExportType.PDF_METADATA:
             resp.data["payload"] = payload
         return resp

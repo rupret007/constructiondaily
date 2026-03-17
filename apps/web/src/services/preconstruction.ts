@@ -421,3 +421,40 @@ export async function fetchExportRecords(planSetId: string): Promise<ExportRecor
   const response = await apiRequest<ExportRecord[]>(`${P}/exports/?plan_set=${planSetId}`);
   return Array.isArray(response) ? response : [];
 }
+
+export type SnapshotDiffRow = {
+  sheet_id: string;
+  sheet_title: string;
+  category: string;
+  unit: string;
+  quantity?: string;
+  quantity_left?: string;
+  quantity_right?: string;
+  quantity_delta?: string;
+};
+
+export type SnapshotDiffSuggestionRow = {
+  sheet_id: string;
+  sheet_title: string;
+  decision_state: string;
+  left_count: number;
+  right_count: number;
+  delta: number;
+};
+
+export type SnapshotDiff = {
+  takeoff_added: SnapshotDiffRow[];
+  takeoff_removed: SnapshotDiffRow[];
+  takeoff_changed: SnapshotDiffRow[];
+  suggestion_summary: SnapshotDiffSuggestionRow[];
+  left_captured_at: string | null;
+  right_captured_at: string | null;
+};
+
+export async function fetchSnapshotDiff(
+  leftId: string,
+  right: string
+): Promise<SnapshotDiff> {
+  const params = new URLSearchParams({ left: leftId, right });
+  return apiRequest<SnapshotDiff>(`${P}/snapshots/diff/?${params.toString()}`);
+}

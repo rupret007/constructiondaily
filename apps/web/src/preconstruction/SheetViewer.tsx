@@ -25,6 +25,7 @@ import {
   fetchExportRecords,
   fetchPlanSheetCadPreview,
   fetchPlanSheet,
+  fetchSnapshotDiff,
   fetchSnapshots,
   fetchSuggestions,
   fetchTakeoffItems,
@@ -38,6 +39,7 @@ import {
   updatePlanSheet,
   updateTakeoffItem,
 } from "../services/preconstruction";
+import type { SnapshotDiff } from "../services/preconstruction";
 import type {
   AISuggestion,
   AnnotationItem,
@@ -275,6 +277,10 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [snapshots, setSnapshots] = useState<RevisionSnapshot[]>([]);
   const [exports, setExports] = useState<ExportRecord[]>([]);
   const [exportPayload, setExportPayload] = useState<string | null>(null);
+  const [diffLeftId, setDiffLeftId] = useState<string>("");
+  const [diffRight, setDiffRight] = useState<string>("current");
+  const [diffResult, setDiffResult] = useState<SnapshotDiff | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [selectedTakeoffId, setSelectedTakeoffId] = useState<string | null>(null);
   const [takeoffCategoryFilter, setTakeoffCategoryFilter] = useState("all");
@@ -1013,6 +1019,12 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     void loadSnapshotsAndExports();
   }, [loadSnapshotsAndExports]);
 
+  useEffect(() => {
+    if (snapshots.length > 0 && (!diffLeftId || !snapshots.some((s) => s.id === diffLeftId))) {
+      setDiffLeftId(snapshots[0].id);
+    }
+  }, [snapshots]);
+
   const handleSaveCalibration = async () => {
     if (!sheet) return;
     const scopeKey = sheetScopeKey;
@@ -1193,6 +1205,23 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     } catch (e) {
       if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to lock.");
+    }
+  };
+
+  const handleCompareSnapshots = async () => {
+    if (!diffLeftId) return;
+    setDiffLoading(true);
+    setDiffResult(null);
+    const scopeKey = sheetScopeKey;
+    try {
+      const result = await fetchSnapshotDiff(diffLeftId, diffRight);
+      if (!isCurrentSheetScope(scopeKey)) return;
+      setDiffResult(result);
+    } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
+      setError(e instanceof Error ? e.message : "Failed to load diff.");
+    } finally {
+      if (isCurrentSheetScope(scopeKey)) setDiffLoading(false);
     }
   };
 
@@ -2106,6 +2135,69 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
             </li>
           ))}
         </ul>
+      )}
+
+      {snapshots.length > 0 && (
+        <>
+          <h4>Compare snapshots</h4>
+          <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
+            <label>
+              Left:{" "}
+              <select
+                value={diffLeftId}
+                onChange={(e) => setDiffLeftId(e.target.value)}
+                aria-label="Left snapshot"
+              >
+                <option value="">Select snapshot</option>
+                {snapshots.map((snap) => (
+                  <option key={snap.id} value={snap.id}>{snap.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Right:{" "}
+              <select
+                value={diffRight}
+                onChange={(e) => setDiffRight(e.target.value)}
+                aria-label="Right snapshot or current"
+              >
+                <option value="current">Current state</option>
+                {snapshots.map((snap) => (
+                  <option key={snap.id} value={snap.id}>{snap.name}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={() => void handleCompareSnapshots()} disabled={!diffLeftId || diffLoading}>
+              {diffLoading ? "Loading…" : "Compare"}
+            </button>
+          </div>
+          {diffResult && (
+            <div className="card" style={{ padding: "0.75rem", marginTop: "0.5rem", fontSize: "0.9rem" }}>
+              <p style={{ margin: "0 0 0.5rem" }}>
+                Takeoff: <strong>{diffResult.takeoff_added.length}</strong> added, <strong>{diffResult.takeoff_removed.length}</strong> removed, <strong>{diffResult.takeoff_changed.length}</strong> quantity change(s).
+                {diffResult.suggestion_summary.length > 0 && (
+                  <> Suggestion decisions: {diffResult.suggestion_summary.slice(0, 5).map((s) => `${s.decision_state} ${s.left_count}→${s.right_count}`).join(", ")}{diffResult.suggestion_summary.length > 5 ? "…" : ""}.</>
+                )}
+              </p>
+              {(diffResult.takeoff_added.length > 0 || diffResult.takeoff_removed.length > 0 || diffResult.takeoff_changed.length > 0) && (
+                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                  {diffResult.takeoff_added.slice(0, 10).map((r, i) => (
+                    <li key={`a-${i}`} style={{ color: "var(--success, green)" }}>+ {r.sheet_title || r.sheet_id} · {r.category} · {r.unit} · {r.quantity}</li>
+                  ))}
+                  {diffResult.takeoff_removed.slice(0, 10).map((r, i) => (
+                    <li key={`r-${i}`} style={{ color: "var(--destructive, #b91c1c)" }}>− {r.sheet_title || r.sheet_id} · {r.category} · {r.unit} · {r.quantity}</li>
+                  ))}
+                  {diffResult.takeoff_changed.slice(0, 10).map((r, i) => (
+                    <li key={`c-${i}`}>Δ {r.sheet_title || r.sheet_id} · {r.category} · {r.unit}: {r.quantity_left} → {r.quantity_right}</li>
+                  ))}
+                  {(diffResult.takeoff_added.length > 10 || diffResult.takeoff_removed.length > 10 || diffResult.takeoff_changed.length > 10) && (
+                    <li className="empty-hint">… and more</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       <h4>Export</h4>

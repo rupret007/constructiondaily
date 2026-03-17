@@ -119,8 +119,8 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 - Retrieval is still deterministic and citation-first, but now includes scope/type/recency weighting rather than plain token count alone.
 - Voice input/output depends on browser speech APIs and gracefully falls back to typed interaction where unsupported.
 - The copilot still does not support structured revision diffs.
-- No snapshot diff/compare screen.
-- "PDF metadata" export remains a placeholder, not a generated PDF file.
+- Snapshot diff is available via API (`snapshots/diff/`) and copilot (“what changed since the last snapshot?”); a dedicated diff/compare UI screen is optional.
+- PDF export generates a takeoff summary PDF (plan set name, capture time, table of sheet/category/unit/quantity).
 
 **Future (roadmap):** Possible next steps include project- or org-level rules (e.g. "door = doors + door_hardware") and exporting accepted/edited suggestions as labeled data for provider calibration or fine-tuning. No implementation commitment yet.
 
@@ -169,8 +169,11 @@ Base path: `/api/preconstruction/`
   - optional sheet-viewer action plans are also returned here when the request includes sheet context and an actionable command
 - `analysis/`: trigger/list AI analysis runs
 - `suggestions/`: list suggestions + accept/reject + batch_accept
+- `suggestions/feedback_export/`: GET export of suggestion outcomes (decision_state, accepted category/unit/quantity) for calibration; query params `project` (required), `plan_set` (optional)
 - `snapshots/`: create/list snapshots + lock
-- `exports/`: create/list export records
+- `snapshots/diff/`: GET compare two snapshots or snapshot vs current; query params `left` (snapshot id), `right` (snapshot id or `current`); returns takeoff_added/removed/changed and suggestion_summary
+- `exports/`: create/list export records (JSON, CSV, or PDF: takeoff summary PDF with plan set name and table of quantities)
+- `takeoff-rules/`: CRUD for project-level takeoff expansion rules (trigger_category, trigger_label_pattern, expansion_components); used when creating takeoff from suggestions or annotations
 
 ## Learning from estimator input
 
@@ -181,6 +184,18 @@ Every accept, edit, and reject is stored. Accept/edit/reject and review states a
 - **Counting items (e.g. door knobs):** Use AI suggestions plus batch accept by confidence, or draw point/rectangle annotations and create takeoff (single-line or assembly such as door + hardware). Counts and categories appear in takeoff rollups and in CSV/JSON exports.
 - **Shading areas:** Draw polygon or rectangle annotations on the sheet, set sheet calibration (width/height + unit), then create takeoff from the annotation with an area unit. Quantities are computed from geometry and calibration and appear in rollups and exports.
 - **Learning from my input:** Every accept/edit/reject is stored; snapshots and exports capture outcomes for audit and for future calibration or learning pipelines.
+
+## Snapshot diff and revision compare
+
+Use `GET /api/preconstruction/snapshots/diff/?left=<snapshot_id>&right=current` (or `right=<other_snapshot_id>`) to get a structured diff: **takeoff_added**, **takeoff_removed**, **takeoff_changed** (with quantity_left, quantity_right, quantity_delta), and **suggestion_summary** (per-sheet decision_state count deltas). The copilot answers questions like “what changed since the last snapshot?” using this diff and reports added/removed/changed takeoff rows and suggestion decision changes.
+
+## Project-level takeoff rules
+
+**ProjectTakeoffRule** lets you define per-project expansion when a takeoff row is created from a suggestion or annotation. For example, trigger on category `doors` and add an extra row: category `door_hardware`, unit `each`, quantity same as primary. Rules have **trigger_category**, optional **trigger_label_pattern** (regex on label), and **expansion_components** (list of `{category, unit, quantity_mode: "same"|"one"}`). They override the built-in assembly profiles (e.g. door set) when a matching rule exists for the project. Manage via API `takeoff-rules/` or Django admin.
+
+## Feedback export for calibration
+
+**GET** `suggestions/feedback_export/?project=<id>&plan_set=<id>` returns a JSON array of suggestion outcomes: id, plan_sheet_id, label, suggestion_type, decision_state, confidence, decided_at, and when accepted/edited: accepted_category, accepted_unit, accepted_quantity. Use this as labeled data for provider calibration or evaluation pipelines.
 
 ## Data and audit notes
 

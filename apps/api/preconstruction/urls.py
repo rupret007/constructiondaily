@@ -10,6 +10,7 @@ from .views import (
     PlanSetViewSet,
     PlanSheetViewSet,
     ProjectDocumentViewSet,
+    ProjectTakeoffRuleViewSet,
     RevisionSnapshotViewSet,
     TakeoffItemViewSet,
 )
@@ -26,5 +27,6 @@ router.register("analysis", AIAnalysisRunViewSet, basename="ai-analysis-run")
 router.register("suggestions", AISuggestionViewSet, basename="ai-suggestion")
 router.register("snapshots", RevisionSnapshotViewSet, basename="revision-snapshot")
 router.register("exports", ExportRecordViewSet, basename="export-record")
+router.register("takeoff-rules", ProjectTakeoffRuleViewSet, basename="project-takeoff-rule")
 
 urlpatterns = router.urls
