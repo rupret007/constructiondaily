@@ -42,7 +42,7 @@ describe("App 401 handling", () => {
   it("shows login form when a key API call returns 401", async () => {
     vi.mocked(getSession).mockResolvedValue({
       authenticated: true,
-      user: { id: "user-1", username: "testuser" },
+      user: { id: 1, username: "testuser", first_name: "Test", last_name: "User" },
     });
     vi.mocked(fetchProjects).mockRejectedValue(new ApiRequestError("Unauthorized", 401));
 

@@ -39,6 +39,12 @@ podman compose -f infra/podman-compose.yml exec app python manage.py seed_simple
 
 For a different username/password: `seed_simple --username demo --password demo`
 
+**If you use a pre-built image** (e.g. `APP_IMAGE=ghcr.io/rupret007/constructiondaily:main-latest`) and `seed_simple` is not available, create the demo user with Option B (`createsuperuser`) or run this once to get **admin** / **admin**:
+
+```batch
+podman compose -f infra/podman-compose.yml exec app python manage.py shell -c "from django.contrib.auth.models import User; from core.models import Project, ProjectMembership; u, _ = User.objects.get_or_create(username='admin', defaults={'email': 'admin@local.dev'}); u.set_password('admin'); u.save(update_fields=['password']); p, _ = Project.objects.get_or_create(code='DEMO', defaults={'name': 'Demo Project', 'location': 'Local'}); ProjectMembership.objects.get_or_create(user=u, project=p, defaults={'role': ProjectMembership.Role.PROJECT_MANAGER, 'is_active': True}); print('Done. Sign in as admin / admin')"
+```
+
 ### Option B: Your own user
 
 Create a superuser and choose any password (for local use you can keep it short, e.g. `admin`):

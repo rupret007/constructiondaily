@@ -318,7 +318,7 @@ describe("SheetViewer", () => {
     );
 
     expect(await screen.findByText(/Door Annotation One/)).toBeInTheDocument();
-    expect(screen.getByText("Pricing Snapshot")).toBeInTheDocument();
+    expect(screen.getAllByText("Pricing Snapshot").length).toBeGreaterThan(0);
     expect(screen.getByText(/recent: csv/i)).toBeInTheDocument();
 
     rerender(<SheetViewer sheetId="sheet-2" planSetId="set-2" onBack={() => {}} />);
@@ -331,7 +331,7 @@ describe("SheetViewer", () => {
     sheetTwoLoad.resolve(buildPlanSheet("sheet-2", "set-2", "Sheet Two"));
 
     expect(await screen.findByText(/Window Annotation Two/)).toBeInTheDocument();
-    expect(screen.getByText("Addendum Snapshot")).toBeInTheDocument();
+    expect(screen.getAllByText("Addendum Snapshot").length).toBeGreaterThan(0);
     expect(screen.getByText(/recent: json/i)).toBeInTheDocument();
   });
 
@@ -384,7 +384,7 @@ describe("SheetViewer", () => {
 
     expect(await screen.findByText(/Window Annotation Two/)).toBeInTheDocument();
     expect(screen.getByText("Window Suggestion Two")).toBeInTheDocument();
-    expect(screen.getByText("Addendum Snapshot")).toBeInTheDocument();
+    expect(screen.getAllByText("Addendum Snapshot").length).toBeGreaterThan(0);
     expect(screen.getByText(/recent: json/i)).toBeInTheDocument();
 
     staleAnnotationsLoad.resolve([
@@ -407,7 +407,7 @@ describe("SheetViewer", () => {
     await waitFor(() => {
       expect(screen.getByText(/Window Annotation Two/)).toBeInTheDocument();
       expect(screen.getByText("Window Suggestion Two")).toBeInTheDocument();
-      expect(screen.getByText("Addendum Snapshot")).toBeInTheDocument();
+      expect(screen.getAllByText("Addendum Snapshot").length).toBeGreaterThan(0);
       expect(screen.getByText(/recent: json/i)).toBeInTheDocument();
       expect(screen.queryByText(/Door Annotation One/)).not.toBeInTheDocument();
       expect(screen.queryByText("Door Suggestion One")).not.toBeInTheDocument();

@@ -27,14 +27,15 @@ export async function flushMutationQueue(): Promise<number> {
       flushed += 1;
       window.dispatchEvent(new CustomEvent("offline-queue-changed"));
     } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 401) {
+        // Session expired; keep mutations in queue for retry after re-auth. Notify app to show login.
+        window.dispatchEvent(new CustomEvent("offline-queue-unauthorized"));
+        break;
+      }
       if (error instanceof ApiRequestError && NON_RETRYABLE_4XX.has(error.status)) {
         // Drop invalid client-side mutations so one bad payload doesn't block the queue forever.
         await removeMutation(mutation.id);
         window.dispatchEvent(new CustomEvent("offline-queue-changed"));
-        if (error.status === 401) {
-          // Session expired; notify app so it can show login (e.g. resetAppState).
-          window.dispatchEvent(new CustomEvent("offline-queue-unauthorized"));
-        }
         continue;
       }
       // Stop processing to preserve ordering and retry later.
