@@ -45,7 +45,7 @@ export function ReportDetail({ report, onSave, onAction, onSyncWeather }: Props)
     );
   }
 
-  const canEdit = report.status !== "locked";
+  const canEdit = report.status === "draft";
   const canReject =
     (report.status === "submitted" || report.status === "reviewed") &&
     reason.trim().length > 0;
@@ -102,6 +102,11 @@ export function ReportDetail({ report, onSave, onAction, onSyncWeather }: Props)
           Weather: {report.weather_summary || "No weather data"} {report.temperature_high_c ?? "-"} /{" "}
           {report.temperature_low_c ?? "-"} C, {report.precipitation_mm ?? "-"} mm rain
         </p>
+        {!canEdit && (
+          <p className="text-sm text-muted-foreground">
+            Submitted and later report states are read-only. Reject the report back to draft before making changes.
+          </p>
+        )}
         {!!report.rejection_reason && (
           <Alert variant="destructive">Rejection: {report.rejection_reason}</Alert>
         )}

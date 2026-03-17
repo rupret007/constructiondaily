@@ -56,4 +56,19 @@ describe("ReportDetail reject action", () => {
     await userEvent.type(screen.getByLabelText(/rejection reason/i), "Reason present");
     expect(rejectButton).toBeDisabled();
   });
+
+  it("keeps save and weather actions disabled once the report leaves draft", () => {
+    render(
+      <ReportDetail
+        report={makeReport({ status: "submitted" })}
+        onSave={async () => {}}
+        onAction={vi.fn()}
+        onSyncWeather={async () => {}}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /sync weather/i })).toBeDisabled();
+    expect(screen.getByText(/read-only/i)).toBeInTheDocument();
+  });
 });

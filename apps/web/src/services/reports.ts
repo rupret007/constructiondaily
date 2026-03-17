@@ -33,11 +33,12 @@ export async function updateReport(reportId: string, payload: Partial<DailyRepor
 export async function transitionReport(
   reportId: string,
   action: "submit" | "review" | "reject" | "approve" | "sign" | "lock",
-  reason = ""
+  reason = "",
+  revision?: number
 ): Promise<DailyReport> {
   return apiRequest<DailyReport>(`/reports/daily/${reportId}/${action}/`, {
     method: "POST",
-    body: JSON.stringify({ reason })
+    body: JSON.stringify({ reason, revision })
   });
 }
 

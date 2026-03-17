@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from core.models import ProjectMembership
 from core.permissions import user_has_project_role
 from reports.models import DailyReport
+from reports.services import bump_report_revision
 from safety.models import SafetyEntry
 from safety.serializers import SafetyEntrySerializer
 
@@ -26,8 +27,7 @@ class SafetyEntryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         report = serializer.validated_data["report"]
-        if report.status == DailyReport.Status.LOCKED:
-            raise ValidationError("Cannot add safety entry to locked report.")
+        _ensure_report_is_draft(report, "add")
         if not user_has_project_role(
             self.request.user,
             str(report.project_id),
@@ -39,14 +39,14 @@ class SafetyEntryViewSet(viewsets.ModelViewSet):
         ):
             raise PermissionDenied("Insufficient permissions.")
         serializer.save()
+        bump_report_revision(report)
 
     def perform_update(self, serializer):
         report = serializer.instance.report
         incoming_report = serializer.validated_data.get("report", report)
         if incoming_report.id != report.id:
             raise ValidationError("Report cannot be changed after entry creation.")
-        if report.status == DailyReport.Status.LOCKED:
-            raise ValidationError("Cannot edit safety entry in locked report.")
+        _ensure_report_is_draft(report, "edit")
         if not user_has_project_role(
             self.request.user,
             str(report.project_id),
@@ -58,10 +58,10 @@ class SafetyEntryViewSet(viewsets.ModelViewSet):
         ):
             raise PermissionDenied("Insufficient permissions.")
         serializer.save()
+        bump_report_revision(report)
 
     def perform_destroy(self, instance):
-        if instance.report.status == DailyReport.Status.LOCKED:
-            raise ValidationError("Cannot delete safety entry in locked report.")
+        _ensure_report_is_draft(instance.report, "delete")
         if not user_has_project_role(
             self.request.user,
             str(instance.report.project_id),
@@ -72,4 +72,11 @@ class SafetyEntryViewSet(viewsets.ModelViewSet):
             ),
         ):
             raise PermissionDenied("Insufficient permissions.")
+        report = instance.report
         instance.delete()
+        bump_report_revision(report)
+
+
+def _ensure_report_is_draft(report: DailyReport, action: str):
+    if report.status != DailyReport.Status.DRAFT:
+        raise ValidationError(f"Cannot {action} safety entry unless report is draft.")

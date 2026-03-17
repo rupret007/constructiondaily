@@ -156,3 +156,4 @@ class DailyReportDetailSerializer(ReportSummarySerializer):
 class ReportTransitionSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, max_length=5000)
     signature_intent = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    revision = serializers.IntegerField(required=False, min_value=1)

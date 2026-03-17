@@ -4,6 +4,7 @@ import hashlib
 import json
 from typing import Any
 
+from django.db.models import F
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -13,6 +14,12 @@ from core.models import ProjectMembership
 from core.permissions import user_has_project_role
 from reports.models import ApprovalAction, DailyReport, ReportSnapshot
 from reports.pdf import save_report_snapshot
+
+
+def bump_report_revision(report: DailyReport) -> DailyReport:
+    DailyReport.objects.filter(pk=report.pk).update(revision=F("revision") + 1, updated_at=timezone.now())
+    report.refresh_from_db(fields=["revision", "updated_at"])
+    return report
 
 
 def _report_hash_payload(report: DailyReport) -> str:
@@ -35,6 +42,7 @@ def transition_report(
     user_agent: str,
     reason: str = "",
     signature_intent: str = "",
+    revision: int | None = None,
 ):
     reason = (reason or "").strip()
     role_lookup = {
@@ -65,6 +73,8 @@ def transition_report(
     }
     if report.status not in expected[action]:
         raise ValidationError(f"Cannot {action} report while in '{report.status}'.")
+    if revision is not None and revision != report.revision:
+        raise ValidationError("Report has changed. Refresh and manually resolve conflicts.")
 
     with transaction.atomic():
         report = DailyReport.objects.select_for_update().get(pk=report.pk)
@@ -72,6 +82,8 @@ def transition_report(
             raise ValidationError("Locked reports cannot be transitioned.")
         if report.status not in expected[action]:
             raise ValidationError(f"Cannot {action} report while in '{report.status}'.")
+        if revision is not None and revision != report.revision:
+            raise ValidationError("Report has changed. Refresh and manually resolve conflicts.")
         if action == "submit":
             report.status = DailyReport.Status.SUBMITTED
             report.rejection_reason = ""

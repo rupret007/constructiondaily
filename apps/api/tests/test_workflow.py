@@ -104,6 +104,57 @@ class ReportWorkflowTests(TestCase):
         )
         self.assertEqual(reject_response.status_code, 400)
 
+    def test_submitted_report_blocks_further_content_edits_until_rejected(self):
+        report_id = self._create_report()
+
+        self.client.login(username="super1", password="test-pass")
+        submit_response = self.client.post(
+            f"/api/reports/daily/{report_id}/submit/",
+            {"revision": 1},
+            format="json",
+        )
+        self.assertEqual(submit_response.status_code, 200)
+
+        blocked_update = self.client.patch(
+            f"/api/reports/daily/{report_id}/",
+            {"summary": "Changed after submit", "revision": 2},
+            format="json",
+        )
+        self.assertEqual(blocked_update.status_code, 403)
+
+        blocked_labor = self.client.post(
+            "/api/reports/labor/",
+            {
+                "report": report_id,
+                "trade": "Electrical",
+                "company": "ACME",
+                "workers": 2,
+                "regular_hours": "8.00",
+                "overtime_hours": "0.00",
+            },
+            format="json",
+        )
+        self.assertEqual(blocked_labor.status_code, 403)
+
+    def test_submit_rejects_stale_revision(self):
+        report_id = self._create_report()
+
+        self.client.login(username="super1", password="test-pass")
+        update_response = self.client.patch(
+            f"/api/reports/daily/{report_id}/",
+            {"summary": "Updated before submit", "revision": 1},
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, 200)
+
+        stale_submit = self.client.post(
+            f"/api/reports/daily/{report_id}/submit/",
+            {"revision": 1},
+            format="json",
+        )
+        self.assertEqual(stale_submit.status_code, 400)
+        self.assertIn("refresh and manually resolve conflicts", str(stale_submit.json()).lower())
+
     def test_sync_weather_requires_write_role(self):
         report_id = self._create_report()
         safety_user = User.objects.create_user(username="safety1", password="test-pass")
@@ -129,16 +180,16 @@ class ReportWorkflowTests(TestCase):
         report_id = self._create_report()
 
         self.client.login(username="super1", password="test-pass")
-        submit_response = self.client.post(f"/api/reports/daily/{report_id}/submit/", {}, format="json")
+        submit_response = self.client.post(f"/api/reports/daily/{report_id}/submit/", {"revision": 1}, format="json")
         self.assertEqual(submit_response.status_code, 200)
         self.client.logout()
 
         self.client.login(username="pm1", password="test-pass")
-        review_response = self.client.post(f"/api/reports/daily/{report_id}/review/", {}, format="json")
+        review_response = self.client.post(f"/api/reports/daily/{report_id}/review/", {"revision": 2}, format="json")
         self.assertEqual(review_response.status_code, 200)
         approve_response = self.client.post(
             f"/api/reports/daily/{report_id}/approve/",
-            {"signature_intent": "Approved by PM with field verification."},
+            {"signature_intent": "Approved by PM with field verification.", "revision": 3},
             format="json",
         )
         self.assertEqual(approve_response.status_code, 200)

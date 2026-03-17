@@ -5,6 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from core.models import Project, ProjectMembership
+from reports.models import DailyReport
 
 
 class PermissionTests(TestCase):
@@ -42,3 +43,23 @@ class PermissionTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201)
+
+    def test_project_manager_can_edit_draft_report(self):
+        pm = User.objects.create_user(username="pm-draft", password="test-pass")
+        ProjectMembership.objects.create(user=pm, project=self.project, role=ProjectMembership.Role.PROJECT_MANAGER)
+        report = DailyReport.objects.create(
+            project=self.project,
+            report_date="2026-03-09",
+            location="Zone C",
+            prepared_by=pm,
+            summary="Initial",
+        )
+
+        self.client.login(username="pm-draft", password="test-pass")
+        response = self.client.patch(
+            f"/api/reports/daily/{report.id}/",
+            {"summary": "Updated by PM", "revision": report.revision},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)

@@ -27,7 +27,7 @@ from reports.serializers import (
     ReportTransitionSerializer,
     WorkLogEntrySerializer,
 )
-from reports.services import transition_report
+from reports.services import bump_report_revision, transition_report
 
 
 class DailyReportViewSet(viewsets.ModelViewSet):
@@ -77,8 +77,7 @@ class DailyReportViewSet(viewsets.ModelViewSet):
             incoming_project = serializer.validated_data.get("project", report.project)
             if incoming_project.id != report.project_id:
                 raise ValidationError("Project cannot be changed after report creation.")
-            if report.status == DailyReport.Status.LOCKED:
-                raise PermissionDenied("Locked reports cannot be edited.")
+            _ensure_report_is_draft(report, "edited")
             incoming_revision = self.request.data.get("revision")
             if incoming_revision is not None:
                 try:
@@ -93,11 +92,13 @@ class DailyReportViewSet(viewsets.ModelViewSet):
                 (
                     ProjectMembership.Role.FOREMAN,
                     ProjectMembership.Role.SUPERINTENDENT,
+                    ProjectMembership.Role.PROJECT_MANAGER,
                     ProjectMembership.Role.ADMIN,
                 ),
             ):
                 raise PermissionDenied("Insufficient permissions.")
             updated = serializer.save()
+            bump_report_revision(updated)
             record_audit_event(
                 actor=self.request.user,
                 event_type="report.updated",
@@ -168,6 +169,7 @@ class DailyReportViewSet(viewsets.ModelViewSet):
             user_agent=user_agent,
             reason=serializer.validated_data.get("reason", ""),
             signature_intent=serializer.validated_data.get("signature_intent", ""),
+            revision=serializer.validated_data.get("revision"),
         )
         return Response(ReportSummarySerializer(updated).data)
 
@@ -192,14 +194,14 @@ class DailyReportViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="sync-weather")
     def sync_weather(self, request, pk=None):
         report = self.get_object()
-        if report.status == DailyReport.Status.LOCKED:
-            raise PermissionDenied("Locked reports cannot be edited.")
+        _ensure_report_is_draft(report, "synced with weather")
         if not user_has_project_role(
             request.user,
             str(report.project_id),
             (
                 ProjectMembership.Role.FOREMAN,
                 ProjectMembership.Role.SUPERINTENDENT,
+                ProjectMembership.Role.PROJECT_MANAGER,
                 ProjectMembership.Role.ADMIN,
             ),
         ):
@@ -243,6 +245,7 @@ class DailyReportViewSet(viewsets.ModelViewSet):
                 "updated_at",
             ]
         )
+        bump_report_revision(report)
         record_audit_event(
             actor=request.user,
             event_type="report.weather.synced",
@@ -260,6 +263,11 @@ def _first_or_none(values):
     return None
 
 
+def _ensure_report_is_draft(report: DailyReport, action: str):
+    if report.status != DailyReport.Status.DRAFT:
+        raise PermissionDenied(f"Only draft reports can be {action}.")
+
+
 class BaseReportEntryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filterset_fields = ("report",)
@@ -273,54 +281,57 @@ class BaseReportEntryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         report = serializer.validated_data["report"]
-        if report.status == DailyReport.Status.LOCKED:
-            raise PermissionDenied("Locked reports cannot be changed.")
+        _ensure_report_is_draft(report, "changed")
         if not user_has_project_role(
             self.request.user,
             str(report.project_id),
             (
                 ProjectMembership.Role.FOREMAN,
                 ProjectMembership.Role.SUPERINTENDENT,
+                ProjectMembership.Role.PROJECT_MANAGER,
                 ProjectMembership.Role.ADMIN,
             ),
         ):
             raise PermissionDenied("Insufficient permissions.")
         serializer.save()
+        bump_report_revision(report)
 
     def perform_update(self, serializer):
         report = serializer.instance.report
         incoming_report = serializer.validated_data.get("report", report)
         if incoming_report.id != report.id:
             raise ValidationError("Report cannot be changed after entry creation.")
-        if report.status == DailyReport.Status.LOCKED:
-            raise PermissionDenied("Locked reports cannot be changed.")
+        _ensure_report_is_draft(report, "changed")
         if not user_has_project_role(
             self.request.user,
             str(report.project_id),
             (
                 ProjectMembership.Role.FOREMAN,
                 ProjectMembership.Role.SUPERINTENDENT,
+                ProjectMembership.Role.PROJECT_MANAGER,
                 ProjectMembership.Role.ADMIN,
             ),
         ):
             raise PermissionDenied("Insufficient permissions.")
         serializer.save()
+        bump_report_revision(report)
 
     def perform_destroy(self, instance):
         report = instance.report
-        if report.status == DailyReport.Status.LOCKED:
-            raise PermissionDenied("Locked reports cannot be changed.")
+        _ensure_report_is_draft(report, "changed")
         if not user_has_project_role(
             self.request.user,
             str(report.project_id),
             (
                 ProjectMembership.Role.FOREMAN,
                 ProjectMembership.Role.SUPERINTENDENT,
+                ProjectMembership.Role.PROJECT_MANAGER,
                 ProjectMembership.Role.ADMIN,
             ),
         ):
             raise PermissionDenied("Insufficient permissions.")
         instance.delete()
+        bump_report_revision(report)
 
 
 class LaborEntryViewSet(BaseReportEntryViewSet):

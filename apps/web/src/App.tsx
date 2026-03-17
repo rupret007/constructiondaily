@@ -241,7 +241,7 @@ export default function App() {
                 `/reports/daily/${selectedReport.id}/${action}/`,
                 { reason: reason ?? "", revision: selectedReport.revision },
                 async () => {
-                  await transitionReport(selectedReport.id, action, reason ?? "");
+                  await transitionReport(selectedReport.id, action, reason ?? "", selectedReport.revision);
                 }
               );
               if (isOnline) {

@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -16,9 +16,10 @@ from core.models import ProjectMembership
 from core.permissions import user_has_project_role
 from files.models import Attachment, UploadIntent
 from files.serializers import AttachmentSerializer, UploadIntentSerializer
-from files.storage import promote_to_safe, quarantine, store_in_stage
+from files.storage import delete_storage_key, promote_to_safe, quarantine, store_in_stage
 from files.validators import validate_upload
 from reports.models import DailyReport
+from reports.services import bump_report_revision
 
 
 class AttachmentViewSet(viewsets.ModelViewSet):
@@ -53,13 +54,17 @@ class AttachmentViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def perform_destroy(self, instance):
-        if instance.report.status == DailyReport.Status.LOCKED:
-            raise PermissionDenied("Locked reports cannot be changed.")
+        if instance.report.status != DailyReport.Status.DRAFT:
+            raise ValidationError("Only draft reports can accept file changes.")
         if not _can_upload_to_project(self.request.user, str(instance.report.project_id)):
             raise PermissionDenied("Insufficient permissions.")
         project_id = str(instance.report.project_id)
         attachment_id = str(instance.id)
+        storage_key = instance.storage_key
+        report = instance.report
         instance.delete()
+        delete_storage_key(storage_key)
+        bump_report_revision(report)
         record_audit_event(
             actor=self.request.user,
             event_type="attachment.deleted",
@@ -92,6 +97,7 @@ class AttachmentViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Invalid scan result."}, status=status.HTTP_400_BAD_REQUEST)
         attachment.scan_detail = detail
         attachment.save(update_fields=["storage_key", "scan_status", "scan_detail", "updated_at"])
+        bump_report_revision(attachment.report)
 
         record_audit_event(
             actor=request.user,
@@ -122,8 +128,11 @@ class UploadIntentViewSet(viewsets.ModelViewSet):
         if not report_id:
             return Response({"detail": "Report is required."}, status=status.HTTP_400_BAD_REQUEST)
         report = get_object_or_404(DailyReport, id=report_id)
-        if report.status == DailyReport.Status.LOCKED:
-            return Response({"detail": "Cannot create upload intent for locked report."}, status=status.HTTP_400_BAD_REQUEST)
+        if report.status != DailyReport.Status.DRAFT:
+            return Response(
+                {"detail": "Only draft reports can accept file changes."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if not _can_upload_to_project(request.user, str(report.project_id)):
             return Response({"detail": "Insufficient permissions."}, status=status.HTTP_403_FORBIDDEN)
 
@@ -195,8 +204,11 @@ def _can_upload_to_project(user, project_id: str) -> bool:
 
 
 def _create_attachment(request_user, report: DailyReport, uploaded_file, enforce_intent_limit: bool, intent_max_size: int = 0):
-    if report.status == DailyReport.Status.LOCKED:
-        return Response({"detail": "Cannot upload files to locked report."}, status=status.HTTP_400_BAD_REQUEST)
+    if report.status != DailyReport.Status.DRAFT:
+        return Response(
+            {"detail": "Only draft reports can accept file changes."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     if not _can_upload_to_project(request_user, str(report.project_id)):
         return Response({"detail": "Insufficient permissions."}, status=status.HTTP_403_FORBIDDEN)
 
@@ -217,6 +229,7 @@ def _create_attachment(request_user, report: DailyReport, uploaded_file, enforce
         uploaded_by=request_user,
         scan_status=Attachment.ScanStatus.PENDING,
     )
+    bump_report_revision(report)
 
     record_audit_event(
         actor=request_user,

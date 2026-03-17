@@ -44,3 +44,11 @@ def quarantine(storage_key: str) -> str:
     target = quarantine_folder / source.name
     source.replace(target)
     return str(target.relative_to(settings.MEDIA_ROOT))
+
+
+def delete_storage_key(storage_key: str) -> None:
+    if not storage_key:
+        return
+    file_path = Path(settings.MEDIA_ROOT) / storage_key
+    if file_path.exists():
+        file_path.unlink()
