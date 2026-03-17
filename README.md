@@ -51,7 +51,7 @@ The app includes a **Preconstruction** area for plan annotation and takeoff: upl
 2. Start development server:
    - `npm run dev`
 
-For containerized run (app + Postgres), see [Deployment with Podman](docs/deployment-podman.md). For local dev, run the API and Web steps above in two terminals.
+For containerized run (app + Postgres), see [Deployment with Podman](docs/deployment-podman.md). **First time?** [Getting started](docs/getting-started.md) walks through running the stack, creating a user, and signing in. For local dev, run the API and Web steps above in two terminals.
 
 ## Security Notes
 
