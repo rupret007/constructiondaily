@@ -5,6 +5,25 @@ REM Run from repo root. Requires Podman (podman compose or podman-compose).
 set ROOT=%~dp0
 cd /d "%ROOT%"
 
+where podman >nul 2>&1
+if errorlevel 1 (
+  echo Podman not found. Install it first, then open a new terminal and run start.bat again.
+  echo.
+  echo Install with Winget:
+  echo   winget install RedHat.Podman
+  echo.
+  echo First time after install you may need: podman machine init
+  echo Then: podman machine start
+  echo.
+  set /p TRY="Try to install Podman now via Winget? [y/N]: "
+  if /i "%TRY%"=="y" (
+    winget install RedHat.Podman
+    echo.
+    echo After install, close this window, open a new terminal, and run start.bat again.
+  )
+  exit /b 1
+)
+
 if not exist .env (
   echo Creating .env from .env.example...
   copy .env.example .env >nul
