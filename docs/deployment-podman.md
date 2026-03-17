@@ -14,7 +14,7 @@ That creates `.env` from `.env.example` if needed, builds the app image, and sta
 
 To stop: `podman compose -f infra/podman-compose.yml down`
 
-**First-time login:** After the stack is up, create a user so you can sign in. See **[Getting started](getting-started.md)** for step-by-step: demo users (`seed_e2e_data`) or your own admin (`createsuperuser`), then open http://localhost:8000 and log in.
+**First-time login:** After the stack is up, create a user so you can sign in. See **[Getting started](getting-started.md)** for step-by-step: simple demo (`seed_simple` → sign in as **admin** / **admin**) or your own user (`createsuperuser`), then open http://localhost:8000 and log in.
 
 On Linux/macOS, same steps without the script:
 

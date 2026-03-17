@@ -26,6 +26,10 @@ Safety role has read access but cannot perform estimator write actions such as s
 
 ## Demo setup
 
+**Using the Podman stack?** See [Getting started](getting-started.md): run `seed_simple` in the app container, then sign in as **admin** / **admin**.
+
+**Running API locally** (no containers):
+
 1. Seed demo data:
    - `python manage.py seed_demo_data`
 2. Add your own user to the demo project (if needed):
