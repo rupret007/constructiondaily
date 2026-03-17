@@ -1220,18 +1220,25 @@ def build_plan_set_estimating_dashboard(
         })
 
     latest_run_by_sheet: dict[str, AIAnalysisRun] = {}
-    analyzed_sheet_ids: set[str] = set()
-    for run in AIAnalysisRun.objects.filter(plan_set=plan_set).select_related("plan_sheet").order_by("-created_at"):
+    latest_completed_run_by_sheet: dict[str, AIAnalysisRun] = {}
+    analysis_runs = list(AIAnalysisRun.objects.filter(plan_set=plan_set).select_related("plan_sheet"))
+    analysis_runs.sort(
+        key=lambda run: run.completed_at or run.started_at or run.created_at,
+        reverse=True,
+    )
+    for run in analysis_runs:
+        if run.plan_sheet_id is None:
+            continue
         sheet_id = str(run.plan_sheet_id)
-        analyzed_sheet_ids.add(sheet_id)
         if sheet_id not in latest_run_by_sheet:
             latest_run_by_sheet[sheet_id] = run
+        if run.status == AIAnalysisRun.Status.COMPLETED and sheet_id not in latest_completed_run_by_sheet:
+            latest_completed_run_by_sheet[sheet_id] = run
 
     pending_suggestions_by_sheet = {
         row["plan_sheet_id"]: row["item_count"]
         for row in AISuggestion.objects.filter(
-            project=plan_set.project,
-            plan_sheet__plan_set=plan_set,
+            analysis_run_id__in=[run.id for run in latest_completed_run_by_sheet.values()],
             decision_state=AISuggestion.DecisionState.PENDING,
         )
         .values("plan_sheet_id")
@@ -1257,6 +1264,7 @@ def build_plan_set_estimating_dashboard(
         calibrated = _sheet_is_calibrated(sheet)
         parsed = sheet.parse_status in {PlanSheet.ParseStatus.PARSED, PlanSheet.ParseStatus.INDEXED}
         latest_run = latest_run_by_sheet.get(sheet_id)
+        latest_completed_run = latest_completed_run_by_sheet.get(sheet_id)
         pending_suggestions = pending_suggestions_by_sheet.get(sheet.id, 0)
 
         if calibrated:
@@ -1282,7 +1290,7 @@ def build_plan_set_estimating_dashboard(
         discipline_rollup["sheet_count"] += 1
         discipline_rollup["calibrated_sheet_count"] += 1 if calibrated else 0
         discipline_rollup["parsed_sheet_count"] += 1 if parsed else 0
-        discipline_rollup["analyzed_sheet_count"] += 1 if latest_run is not None else 0
+        discipline_rollup["analyzed_sheet_count"] += 1 if latest_completed_run is not None else 0
         discipline_rollup["takeoff_total_items"] += rollup["total_items"]
         discipline_rollup["pending_items"] += rollup["pending_items"]
         discipline_rollup["pending_suggestions"] += pending_suggestions
@@ -1325,7 +1333,7 @@ def build_plan_set_estimating_dashboard(
             "total_sheet_count": len(plan_sheets),
             "calibrated_sheet_count": calibrated_sheet_count,
             "parsed_sheet_count": parsed_sheet_count,
-            "analyzed_sheet_count": len(analyzed_sheet_ids),
+            "analyzed_sheet_count": len(latest_completed_run_by_sheet),
             "sheets_with_takeoff_count": sheets_with_takeoff_count,
             "pending_suggestion_count": sum(pending_suggestions_by_sheet.values()),
             "unassigned_takeoff_items": unassigned_summary["total_items"],

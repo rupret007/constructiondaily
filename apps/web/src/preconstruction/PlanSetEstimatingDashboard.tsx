@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchPlanSetEstimatingDashboard } from "../services/preconstruction";
@@ -39,21 +39,37 @@ export function PlanSetEstimatingDashboard({
   const [dashboard, setDashboard] = useState<PlanSetEstimatingDashboard | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    setDashboard(null);
+    setError("");
+    if (!planSetId) {
+      setLoading(false);
+    }
+  }, [planSetId]);
 
   const loadDashboard = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     if (!planSetId) {
       setDashboard(null);
+      setLoading(false);
       return;
     }
     setLoading(true);
     setError("");
     try {
       const payload = await fetchPlanSetEstimatingDashboard(planSetId);
+      if (requestId !== requestIdRef.current) return;
       setDashboard(payload);
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load estimating dashboard.");
       setDashboard(null);
     } finally {
+      if (requestId !== requestIdRef.current) return;
       setLoading(false);
     }
   }, [planSetId]);
@@ -140,7 +156,7 @@ export function PlanSetEstimatingDashboard({
                     <dt className="text-muted-foreground">Latest snapshot</dt>
                     <dd className="text-right font-medium text-foreground">
                       {dashboard.latest_snapshot
-                        ? `${dashboard.latest_snapshot.name} · ${formatTokenLabel(dashboard.latest_snapshot.status)}`
+                        ? `${dashboard.latest_snapshot.name} | ${formatTokenLabel(dashboard.latest_snapshot.status)}`
                         : "None yet"}
                     </dd>
                   </div>
@@ -148,7 +164,7 @@ export function PlanSetEstimatingDashboard({
                     <dt className="text-muted-foreground">Latest export</dt>
                     <dd className="text-right font-medium text-foreground">
                       {dashboard.latest_export
-                        ? `${formatTokenLabel(dashboard.latest_export.export_type)} · ${formatTokenLabel(dashboard.latest_export.status)}`
+                        ? `${formatTokenLabel(dashboard.latest_export.export_type)} | ${formatTokenLabel(dashboard.latest_export.status)}`
                         : "None yet"}
                     </dd>
                   </div>
@@ -254,7 +270,7 @@ export function PlanSetEstimatingDashboard({
                             </span>
                           </div>
                           <p className="text-sm text-muted-foreground">
-                            {row.discipline || "No discipline"} · {row.total_items} takeoff rows · {row.pending_items} pending review · {row.pending_suggestions} pending suggestions
+                            {row.discipline || "No discipline"} | {row.total_items} takeoff rows | {row.pending_items} pending review | {row.pending_suggestions} pending suggestions
                           </p>
                           {row.top_categories.length ? (
                             <div className="flex flex-wrap gap-2">
@@ -276,7 +292,7 @@ export function PlanSetEstimatingDashboard({
                             Latest analysis:{" "}
                             <span className="font-medium text-foreground">
                               {row.latest_analysis_status
-                                ? `${formatTokenLabel(row.latest_analysis_status)} · ${formatTimestamp(row.latest_analysis_at)}`
+                                ? `${formatTokenLabel(row.latest_analysis_status)} | ${formatTimestamp(row.latest_analysis_at)}`
                                 : "Not run yet"}
                             </span>
                           </p>
@@ -296,3 +312,4 @@ export function PlanSetEstimatingDashboard({
     </Card>
   );
 }
+

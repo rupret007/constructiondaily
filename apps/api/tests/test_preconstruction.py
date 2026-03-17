@@ -1084,6 +1084,128 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(payload["discipline_rollups"][0]["discipline"], "Architectural")
         self.assertEqual(payload["discipline_rollups"][0]["takeoff_total_items"], 3)
 
+    def test_takeoff_dashboard_uses_latest_completed_ai_run_for_coverage(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="AI Coverage Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        sheet_a = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="Door Plan",
+            sheet_number="A101",
+            discipline="Architectural",
+            storage_key="plans/test/a101.pdf",
+            parse_status=PlanSheet.ParseStatus.PARSED,
+            created_by=self.user,
+        )
+        sheet_b = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            title="Window Plan",
+            sheet_number="A201",
+            discipline="Architectural",
+            storage_key="plans/test/a201.pdf",
+            parse_status=PlanSheet.ParseStatus.PARSED,
+            created_by=self.user,
+        )
+
+        older_completed = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=sheet_a,
+            provider_name="mock",
+            user_prompt="Older run",
+            status=AIAnalysisRun.Status.COMPLETED,
+            started_at=timezone.now() - timedelta(minutes=12),
+            completed_at=timezone.now() - timedelta(minutes=11),
+            created_by=self.user,
+        )
+        AISuggestion.objects.create(
+            analysis_run=older_completed,
+            project=self.project,
+            plan_sheet=sheet_a,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Older door",
+            rationale="Older run suggestion",
+            confidence="0.91",
+        )
+
+        latest_completed = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=sheet_a,
+            provider_name="mock",
+            user_prompt="Latest completed run",
+            status=AIAnalysisRun.Status.COMPLETED,
+            started_at=timezone.now() - timedelta(minutes=7),
+            completed_at=timezone.now() - timedelta(minutes=6),
+            created_by=self.user,
+        )
+        AISuggestion.objects.create(
+            analysis_run=latest_completed,
+            project=self.project,
+            plan_sheet=sheet_a,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.2, "y": 0.2, "width": 0.1, "height": 0.1},
+            label="Door A1",
+            rationale="Latest completed suggestion 1",
+            confidence="0.96",
+        )
+        AISuggestion.objects.create(
+            analysis_run=latest_completed,
+            project=self.project,
+            plan_sheet=sheet_a,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.3, "y": 0.2, "width": 0.1, "height": 0.1},
+            label="Door A2",
+            rationale="Latest completed suggestion 2",
+            confidence="0.95",
+        )
+
+        AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=sheet_a,
+            provider_name="mock",
+            user_prompt="Failed rerun",
+            status=AIAnalysisRun.Status.FAILED,
+            started_at=timezone.now() - timedelta(minutes=2),
+            completed_at=timezone.now() - timedelta(minutes=1),
+            created_by=self.user,
+        )
+        AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=sheet_b,
+            provider_name="mock",
+            user_prompt="Failed only",
+            status=AIAnalysisRun.Status.FAILED,
+            started_at=timezone.now() - timedelta(minutes=4),
+            completed_at=timezone.now() - timedelta(minutes=3),
+            created_by=self.user,
+        )
+
+        resp = self.client.get(
+            "/api/preconstruction/takeoff/dashboard/",
+            {"plan_set": str(plan_set.id)},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["coverage"]["analyzed_sheet_count"], 1)
+        self.assertEqual(payload["coverage"]["pending_suggestion_count"], 2)
+        self.assertEqual(payload["discipline_rollups"][0]["analyzed_sheet_count"], 1)
+        sheet_rows = {row["sheet_number"]: row for row in payload["sheet_rollups"]}
+        self.assertEqual(sheet_rows["A101"]["latest_analysis_status"], "failed")
+        self.assertEqual(sheet_rows["A101"]["pending_suggestions"], 2)
+        self.assertEqual(sheet_rows["A201"]["latest_analysis_status"], "failed")
+        self.assertEqual(sheet_rows["A201"]["pending_suggestions"], 0)
+
     def test_takeoff_create_rejects_cross_project_references(self):
         self.client.login(username="estimator1", password="test-pass")
         other_project = Project.objects.create(code="BID-3", name="Building C", location="Site Z")

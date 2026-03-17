@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -43,35 +43,71 @@ export function PreconstructionDashboard({
   const [createName, setCreateName] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
+  const selectedPlanSetIdRef = useRef("");
+  const planSetRequestIdRef = useRef(0);
+  const sheetRequestIdRef = useRef(0);
+
+  const resetPlanSetScope = useCallback(() => {
+    planSetRequestIdRef.current += 1;
+    sheetRequestIdRef.current += 1;
+    setPlanSets([]);
+    setSelectedPlanSetId("");
+    setSheets([]);
+    setDashboardRefreshKey(0);
+    setShowCreateForm(false);
+    setCreateName("");
+  }, []);
+
+  useEffect(() => {
+    selectedPlanSetIdRef.current = selectedPlanSetId;
+  }, [selectedPlanSetId]);
+
+  useEffect(() => {
+    resetPlanSetScope();
+  }, [projectId, resetPlanSetScope]);
+
+  useEffect(() => {
+    sheetRequestIdRef.current += 1;
+    setSheets([]);
+  }, [selectedPlanSetId]);
 
   const loadPlanSets = useCallback(async () => {
+    const requestId = planSetRequestIdRef.current + 1;
+    planSetRequestIdRef.current = requestId;
     if (!projectId) {
       setPlanSets([]);
       setSelectedPlanSetId("");
       setSheets([]);
+      setLoading(false);
       return;
     }
     setLoading(true);
     try {
       const list = await fetchPlanSets(projectId);
+      if (requestId !== planSetRequestIdRef.current) return;
       setPlanSets(list);
-      if (selectedPlanSetId && !list.some((s) => s.id === selectedPlanSetId)) {
+      const currentPlanSetId = selectedPlanSetIdRef.current;
+      if (currentPlanSetId && !list.some((s) => s.id === currentPlanSetId)) {
         setSelectedPlanSetId("");
         setSheets([]);
       }
     } catch (e) {
+      if (requestId !== planSetRequestIdRef.current) return;
       onError(e instanceof Error ? e.message : "Failed to load plan sets.");
       setPlanSets([]);
     } finally {
+      if (requestId !== planSetRequestIdRef.current) return;
       setLoading(false);
     }
-  }, [projectId, selectedPlanSetId, onError]);
+  }, [projectId, onError]);
 
   useEffect(() => {
     void loadPlanSets();
   }, [loadPlanSets]);
 
   const loadSheets = useCallback(async () => {
+    const requestId = sheetRequestIdRef.current + 1;
+    sheetRequestIdRef.current = requestId;
     if (!selectedPlanSetId) {
       setSheets([]);
       return;
@@ -79,11 +115,14 @@ export function PreconstructionDashboard({
     setLoading(true);
     try {
       const list = await fetchPlanSheets(selectedPlanSetId);
+      if (requestId !== sheetRequestIdRef.current) return;
       setSheets(list);
     } catch (e) {
+      if (requestId !== sheetRequestIdRef.current) return;
       onError(e instanceof Error ? e.message : "Failed to load plan sheets.");
       setSheets([]);
     } finally {
+      if (requestId !== sheetRequestIdRef.current) return;
       setLoading(false);
     }
   }, [selectedPlanSetId, onError]);
@@ -125,6 +164,12 @@ export function PreconstructionDashboard({
 
   const selectedPlanSet = planSets.find((s) => s.id === selectedPlanSetId);
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const handleProjectChange = (nextProjectId: string) => {
+    if (nextProjectId === selectedProjectId) return;
+    resetPlanSetScope();
+    onClearError();
+    onProjectChange(nextProjectId);
+  };
 
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,40%)_1fr]">
@@ -140,7 +185,7 @@ export function PreconstructionDashboard({
             <select
               id="precon-project"
               value={selectedProjectId}
-              onChange={(e) => onProjectChange(e.target.value)}
+              onChange={(e) => handleProjectChange(e.target.value)}
               aria-label="Select project"
               className="flex h-11 min-h-[44px] w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             >
