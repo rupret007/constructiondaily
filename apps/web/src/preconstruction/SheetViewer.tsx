@@ -78,6 +78,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function buildSheetScopeKey(planSetId: string, sheetId: string): string {
+  return `${planSetId}:${sheetId}`;
+}
+
 /** Derive default category and unit from suggestion label/type (mirrors backend mapping). */
 function defaultCategoryUnitForSuggestion(
   label: string | null | undefined,
@@ -230,7 +234,14 @@ function matchesTakeoffWorkspaceFilters(
 export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const sheetDataRequestRef = useRef(0);
+  const suggestionsRequestRef = useRef(0);
+  const snapshotsExportsRequestRef = useRef(0);
   const takeoffWorkspaceRequestRef = useRef(0);
+  const pdfDocumentRequestRef = useRef(0);
+  const pdfRenderRequestRef = useRef(0);
+  const currentSheetScopeRef = useRef(buildSheetScopeKey(planSetId, sheetId));
+  const currentPlanSetScopeRef = useRef(planSetId);
   const [sheet, setSheet] = useState<PlanSheet | null>(null);
   const [layers, setLayers] = useState<LayerType[]>([]);
   const [annotations, setAnnotations] = useState<AnnotationItem[]>([]);
@@ -287,8 +298,20 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [calibrationHeight, setCalibrationHeight] = useState("");
   const [calibrationUnit, setCalibrationUnit] = useState<"feet" | "meters">("feet");
   const [savingCalibration, setSavingCalibration] = useState(false);
+  const sheetScopeKey = buildSheetScopeKey(planSetId, sheetId);
+  const planSetScopeKey = planSetId;
+
+  useEffect(() => {
+    currentSheetScopeRef.current = sheetScopeKey;
+    currentPlanSetScopeRef.current = planSetScopeKey;
+  }, [sheetScopeKey, planSetScopeKey]);
+
+  const isCurrentSheetScope = useCallback((scopeKey: string) => currentSheetScopeRef.current === scopeKey, []);
+  const isCurrentPlanSetScope = useCallback((scopeKey: string) => currentPlanSetScopeRef.current === scopeKey, []);
 
   const loadSheetAndData = useCallback(async () => {
+    if (!isCurrentSheetScope(sheetScopeKey)) return;
+    const requestId = ++sheetDataRequestRef.current;
     setLoading(true);
     setError("");
     try {
@@ -296,6 +319,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         fetchPlanSheet(sheetId),
         fetchAnnotationLayers(sheetId),
       ]);
+      if (requestId !== sheetDataRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return;
       setSheet(sheetData);
       setAnalysisProvider((prev) => {
         if (sheetData.file_type === "dxf" || sheetData.file_type === "dwg") {
@@ -322,8 +346,10 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       if (sheetData.file_type === "dxf" || sheetData.file_type === "dwg") {
         try {
           const preview = await fetchPlanSheetCadPreview(sheetId);
+          if (requestId !== sheetDataRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return;
           setCadPreviewItems(preview.items ?? []);
         } catch (previewError) {
+          if (requestId !== sheetDataRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return;
           setCadPreviewItems([]);
           setError(previewError instanceof Error ? previewError.message : "Failed to load CAD preview.");
         }
@@ -331,15 +357,20 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         setCadPreviewItems([]);
       }
       const annList = await fetchAnnotations(sheetId);
+      if (requestId !== sheetDataRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return;
       setAnnotations(annList);
+      setSelectedAnnotationId((current) => (current && annList.some((item) => item.id === current) ? current : null));
     } catch (e) {
+      if (requestId !== sheetDataRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to load sheet.");
     } finally {
+      if (requestId !== sheetDataRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return;
       setLoading(false);
     }
-  }, [sheetId, planSetId]);
+  }, [isCurrentSheetScope, sheetId, sheetScopeKey]);
 
   const loadTakeoffWorkspace = useCallback(async (preferredTakeoffId?: string | null) => {
+    if (!isCurrentSheetScope(sheetScopeKey)) return [];
     const requestId = ++takeoffWorkspaceRequestRef.current;
     const filters = {
       ...(takeoffCategoryFilter !== "all" ? { category: takeoffCategoryFilter } : {}),
@@ -351,7 +382,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         fetchTakeoffItems(planSetId, sheetId, filters),
         fetchTakeoffSummary(planSetId, sheetId, filters),
       ]);
-      if (requestId !== takeoffWorkspaceRequestRef.current) return list;
+      if (requestId !== takeoffWorkspaceRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return list;
       setTakeoffItems(list);
       setTakeoffSummary(summary);
       setSelectedTakeoffId((current) => {
@@ -361,16 +392,17 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       });
       return list;
     } catch (e) {
-      if (requestId !== takeoffWorkspaceRequestRef.current) return [];
+      if (requestId !== takeoffWorkspaceRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return [];
       setTakeoffItems([]);
       setTakeoffSummary(null);
       setSelectedTakeoffId(null);
       setError(e instanceof Error ? e.message : "Failed to load takeoff workspace.");
       return [];
     }
-  }, [planSetId, sheetId, takeoffCategoryFilter, takeoffSourceFilter, takeoffReviewFilter]);
+  }, [isCurrentSheetScope, planSetId, sheetId, sheetScopeKey, takeoffCategoryFilter, takeoffSourceFilter, takeoffReviewFilter]);
 
   const focusTakeoffInWorkspace = useCallback(async (takeoff: Pick<TakeoffItem, "id" | "category" | "source" | "review_state">) => {
+    if (!isCurrentSheetScope(sheetScopeKey)) return;
     const matchesCurrentFilters = matchesTakeoffWorkspaceFilters(takeoff, {
       category: takeoffCategoryFilter,
       source: takeoffSourceFilter,
@@ -384,11 +416,47 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     setTakeoffCategoryFilter("all");
     setTakeoffSourceFilter("all");
     setTakeoffReviewFilter("all");
-  }, [loadTakeoffWorkspace, takeoffCategoryFilter, takeoffReviewFilter, takeoffSourceFilter]);
+  }, [isCurrentSheetScope, loadTakeoffWorkspace, sheetScopeKey, takeoffCategoryFilter, takeoffReviewFilter, takeoffSourceFilter]);
 
   const refreshSheetAndWorkspace = useCallback(async () => {
     await Promise.all([loadSheetAndData(), loadTakeoffWorkspace()]);
   }, [loadSheetAndData, loadTakeoffWorkspace]);
+
+  useEffect(() => {
+    sheetDataRequestRef.current += 1;
+    suggestionsRequestRef.current += 1;
+    snapshotsExportsRequestRef.current += 1;
+    takeoffWorkspaceRequestRef.current += 1;
+    pdfDocumentRequestRef.current += 1;
+    pdfRenderRequestRef.current += 1;
+    setLoading(true);
+    setError("");
+    setSheet(null);
+    setLayers([]);
+    setAnnotations([]);
+    setTakeoffItems([]);
+    setTakeoffSummary(null);
+    setSuggestions([]);
+    setSnapshots([]);
+    setExports([]);
+    setExportPayload(null);
+    setCadPreviewItems([]);
+    setPdfDoc(null);
+    setSelectedAnnotationId(null);
+    setSelectedTakeoffId(null);
+    setEditingSuggestionId(null);
+    setGeometryEdit(null);
+    setPlacementMode("none");
+    setRectDragStart(null);
+    setRectDragCurrent(null);
+    setDraftPathPoints([]);
+    setIsPanning(false);
+    setPan({ x: 0, y: 0 });
+    setCreating(false);
+    setAiRunning(false);
+    setBatchAccepting(false);
+    setSavingCalibration(false);
+  }, [planSetId, sheetId]);
 
   useEffect(() => {
     void loadSheetAndData();
@@ -427,6 +495,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     label: string
   ) => {
     if (!sheet) return;
+    const scopeKey = sheetScopeKey;
     setCreating(true);
     try {
       let layer = layers[0];
@@ -437,6 +506,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           plan_sheet: sheetId,
           name: "Default",
         });
+        if (!isCurrentSheetScope(scopeKey)) return;
         setLayers((prev) => [...prev, layer]);
       }
       await createAnnotation({
@@ -449,8 +519,10 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       });
       await loadSheetAndData();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to add annotation.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setCreating(false);
     }
   };
@@ -477,13 +549,15 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     const before = JSON.stringify(edit.originalGeometry);
     const after = JSON.stringify(edit.geometry);
     if (before === after) return;
+    const scopeKey = sheetScopeKey;
     try {
       await updateAnnotation(edit.annotationId, { geometry_json: edit.geometry });
       await loadSheetAndData();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to update annotation geometry.");
     }
-  }, [loadSheetAndData]);
+  }, [isCurrentSheetScope, loadSheetAndData, sheetScopeKey]);
 
   const applyGeometryEdit = useCallback((edit: GeometryEditState, coords: { x: number; y: number }) => {
     const clamped = { x: clamp01(coords.x), y: clamp01(coords.y) };
@@ -747,11 +821,14 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
 
   const handleDeleteAnnotation = async (annotationId: string) => {
     if (!window.confirm("Delete this annotation? This cannot be undone.")) return;
+    const scopeKey = sheetScopeKey;
     try {
       await deleteAnnotation(annotationId);
+      if (!isCurrentSheetScope(scopeKey)) return;
       setSelectedAnnotationId((id) => (id === annotationId ? null : id));
       await refreshSheetAndWorkspace();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to delete.");
     }
   };
@@ -761,22 +838,26 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     assemblyProfile = annotationAssemblyProfile
   ) => {
     if (!sheet) return;
+    const scopeKey = sheetScopeKey;
     setCreating(true);
     setError("");
     try {
       const created = await createTakeoffFromAnnotation(annotation.id, assemblyProfile);
+      if (!isCurrentSheetScope(scopeKey)) return;
       await focusTakeoffInWorkspace(created.primary_takeoff);
-      const annList = await fetchAnnotations(sheetId);
-      setAnnotations(annList);
+      await loadSheetAndData();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to add takeoff.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setCreating(false);
     }
   };
 
   const handleAddTakeoff = async () => {
     if (!sheet) return;
+    const scopeKey = sheetScopeKey;
     setCreating(true);
     setError("");
     try {
@@ -788,11 +869,14 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         unit: addTakeoffUnit,
         quantity: addTakeoffQuantity,
       });
+      if (!isCurrentSheetScope(scopeKey)) return;
       setAddTakeoffQuantity("1");
       await focusTakeoffInWorkspace(created);
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to add takeoff.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setCreating(false);
     }
   };
@@ -810,6 +894,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
 
   const handleSaveTakeoff = async () => {
     if (!selectedTakeoffId) return;
+    const scopeKey = sheetScopeKey;
     setCreating(true);
     setError("");
     try {
@@ -823,10 +908,13 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         review_state: editTakeoffReviewState,
         notes: editTakeoffNotes,
       });
+      if (!isCurrentSheetScope(scopeKey)) return;
       await focusTakeoffInWorkspace(updated);
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to save takeoff.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setCreating(false);
     }
   };
@@ -834,38 +922,67 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const handleDeleteTakeoff = async () => {
     if (!selectedTakeoffId) return;
     if (!window.confirm("Delete this takeoff item?")) return;
+    const scopeKey = sheetScopeKey;
     setCreating(true);
     setError("");
     try {
       await deleteTakeoffItem(selectedTakeoffId);
+      if (!isCurrentSheetScope(scopeKey)) return;
       await loadTakeoffWorkspace();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to delete takeoff.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setCreating(false);
     }
   };
 
   const loadSuggestions = useCallback(async () => {
-    const list = await fetchSuggestions(sheetId);
-    setSuggestions(list);
-  }, [sheetId]);
+    if (!isCurrentSheetScope(sheetScopeKey)) return;
+    const requestId = ++suggestionsRequestRef.current;
+    try {
+      const list = await fetchSuggestions(sheetId);
+      if (requestId !== suggestionsRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return;
+      setSuggestions(list);
+      setEditingSuggestionId((current) => (current && list.some((item) => item.id === current) ? current : null));
+    } catch (e) {
+      if (requestId !== suggestionsRequestRef.current || !isCurrentSheetScope(sheetScopeKey)) return;
+      setSuggestions([]);
+      setEditingSuggestionId(null);
+      setError(e instanceof Error ? e.message : "Failed to load AI suggestions.");
+    }
+  }, [isCurrentSheetScope, sheetId, sheetScopeKey]);
 
   const handleLayerVisibilityToggle = async (layer: LayerType) => {
+    const scopeKey = sheetScopeKey;
     try {
       await updateAnnotationLayer(layer.id, { is_visible: !layer.is_visible });
+      if (!isCurrentSheetScope(scopeKey)) return;
       const list = await fetchAnnotationLayers(sheetId);
+      if (!isCurrentSheetScope(scopeKey)) return;
       setLayers(list);
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to update layer.");
     }
   };
 
   const loadSnapshotsAndExports = useCallback(async () => {
-    const [s, e] = await Promise.all([fetchSnapshots(planSetId), fetchExportRecords(planSetId)]);
-    setSnapshots(s);
-    setExports(e);
-  }, [planSetId]);
+    if (!isCurrentPlanSetScope(planSetScopeKey)) return;
+    const requestId = ++snapshotsExportsRequestRef.current;
+    try {
+      const [s, e] = await Promise.all([fetchSnapshots(planSetId), fetchExportRecords(planSetId)]);
+      if (requestId !== snapshotsExportsRequestRef.current || !isCurrentPlanSetScope(planSetScopeKey)) return;
+      setSnapshots(s);
+      setExports(e);
+    } catch (error) {
+      if (requestId !== snapshotsExportsRequestRef.current || !isCurrentPlanSetScope(planSetScopeKey)) return;
+      setSnapshots([]);
+      setExports([]);
+      setError(error instanceof Error ? error.message : "Failed to load snapshots and exports.");
+    }
+  }, [isCurrentPlanSetScope, planSetId, planSetScopeKey]);
 
   useEffect(() => {
     if (!rectDragStart || placementMode !== "rectangle") return;
@@ -898,6 +1015,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
 
   const handleSaveCalibration = async () => {
     if (!sheet) return;
+    const scopeKey = sheetScopeKey;
     setSavingCalibration(true);
     setError("");
     try {
@@ -919,18 +1037,22 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         calibrated_height: heightNum,
         calibrated_unit: calibrationUnit,
       });
+      if (!isCurrentSheetScope(scopeKey)) return;
       setSheet(updated);
       setCalibrationWidth(updated.calibrated_width != null ? String(updated.calibrated_width) : "");
       setCalibrationHeight(updated.calibrated_height != null ? String(updated.calibrated_height) : "");
       setCalibrationUnit(updated.calibrated_unit ?? "feet");
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to save calibration.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setSavingCalibration(false);
     }
   };
 
   const handleRunAnalysis = async (promptOverride?: string, providerOverride?: AnalysisProvider) => {
+    const scopeKey = sheetScopeKey;
     const nextPrompt = (promptOverride ?? aiPrompt).trim();
     const nextProvider = providerOverride ?? analysisProvider;
     if (!nextPrompt) {
@@ -950,34 +1072,43 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
     try {
       setAiPrompt(nextPrompt);
       await triggerAnalysis(sheetId, nextPrompt, nextProvider);
+      if (!isCurrentSheetScope(scopeKey)) return;
       await loadSuggestions();
       await loadSheetAndData();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Analysis failed.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setAiRunning(false);
     }
   };
 
   const handleAcceptSuggestion = async (suggestionId: string) => {
+    const scopeKey = sheetScopeKey;
     setError("");
     try {
       const result = await acceptSuggestion(suggestionId);
+      if (!isCurrentSheetScope(scopeKey)) return;
       await loadSuggestions();
       await loadSheetAndData();
       await focusTakeoffInWorkspace(result.takeoff);
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to accept.");
     }
   };
 
   const handleRejectSuggestion = async (suggestionId: string) => {
     if (!window.confirm("Reject this suggestion? This cannot be undone.")) return;
+    const scopeKey = sheetScopeKey;
     try {
       await rejectSuggestion(suggestionId);
+      if (!isCurrentSheetScope(scopeKey)) return;
       setEditingSuggestionId(null);
       await loadSuggestions();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to reject.");
     }
   };
@@ -992,6 +1123,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   };
 
   const handleAcceptWithEdits = async (suggestionId: string) => {
+    const scopeKey = sheetScopeKey;
     setError("");
     try {
       const result = await acceptSuggestion(suggestionId, {
@@ -1000,33 +1132,40 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         unit: editUnit,
         quantity: editQuantity,
       });
+      if (!isCurrentSheetScope(scopeKey)) return;
       setEditingSuggestionId(null);
       await loadSuggestions();
       await loadSheetAndData();
       await focusTakeoffInWorkspace(result.takeoff);
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to accept with edits.");
     }
   };
 
   const handleBatchAccept = async () => {
+    const scopeKey = sheetScopeKey;
     setBatchAccepting(true);
     setError("");
     try {
       const result = await batchAcceptSuggestions(sheetId, 0.85);
+      if (!isCurrentSheetScope(scopeKey)) return;
       if (result.accepted_count > 0) {
         await loadSuggestions();
         await refreshSheetAndWorkspace();
       }
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to batch accept.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setBatchAccepting(false);
     }
   };
 
   const handleCreateSnapshot = async (nameOverride?: string) => {
     if (!sheet) return;
+    const scopeKey = sheetScopeKey;
     setCreating(true);
     try {
       await createSnapshot({
@@ -1034,33 +1173,43 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
         plan_set: planSetId,
         name: nameOverride || `Snapshot ${new Date().toISOString().slice(0, 10)}`,
       });
+      if (!isCurrentSheetScope(scopeKey)) return;
       await loadSnapshotsAndExports();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to create snapshot.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setCreating(false);
     }
   };
 
   const handleLockSnapshot = async (snapshotId: string) => {
+    const scopeKey = sheetScopeKey;
     try {
       await lockSnapshot(snapshotId);
+      if (!isCurrentSheetScope(scopeKey)) return;
       await loadSnapshotsAndExports();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to lock.");
     }
   };
 
   const handleExport = async (exportType: "json" | "csv") => {
+    const scopeKey = sheetScopeKey;
     setCreating(true);
     setError("");
     try {
       const result = await createExport({ plan_set: planSetId, export_type: exportType });
+      if (!isCurrentSheetScope(scopeKey)) return;
       setExportPayload(typeof result.payload === "string" ? result.payload : JSON.stringify(result.payload, null, 2));
       await loadSnapshotsAndExports();
     } catch (e) {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Export failed.");
     } finally {
+      if (!isCurrentSheetScope(scopeKey)) return;
       setCreating(false);
     }
   };
@@ -1183,20 +1332,38 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       setPdfDoc(null);
       return;
     }
+    const scopeKey = sheetScopeKey;
+    const requestId = ++pdfDocumentRequestRef.current;
     const url = planSheetFileUrl(sheetId);
-    pdfjsLib.getDocument({ url, withCredentials: true }).promise.then((doc) => {
+    const loadingTask = pdfjsLib.getDocument({ url, withCredentials: true });
+    let cancelled = false;
+    loadingTask.promise.then((doc) => {
+      if (cancelled || requestId !== pdfDocumentRequestRef.current || !isCurrentSheetScope(scopeKey)) {
+        void doc.destroy();
+        return;
+      }
       setPdfDoc(doc);
     }).catch((e) => {
+      if (cancelled || requestId !== pdfDocumentRequestRef.current || !isCurrentSheetScope(scopeKey)) return;
       setError(e instanceof Error ? e.message : "Failed to load PDF.");
     });
-  }, [sheet, sheetId]);
+    return () => {
+      cancelled = true;
+      void loadingTask.destroy();
+    };
+  }, [isCurrentSheetScope, sheet, sheetId, sheetScopeKey]);
 
   useEffect(() => {
     if (!pdfDoc || !canvasRef.current) return;
+    const scopeKey = sheetScopeKey;
+    const requestId = ++pdfRenderRequestRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    let cancelled = false;
+    let renderTask: pdfjsLib.RenderTask | null = null;
     pdfDoc.getPage(1).then((page) => {
+      if (cancelled || requestId !== pdfRenderRequestRef.current || !isCurrentSheetScope(scopeKey)) return;
       const viewport = page.getViewport({ scale });
       canvas.width = viewport.width;
       canvas.height = viewport.height;
@@ -1204,17 +1371,35 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
       const pw = viewport.width;
       const ph = viewport.height;
       const drawOverlays = () => drawInteractiveOverlays(ctx, pw, ph);
-      const task = page.render(renderContext);
-      if (task.promise) {
-        task.promise.then(drawOverlays);
+      renderTask = page.render(renderContext);
+      if (renderTask.promise) {
+        renderTask.promise.then(() => {
+          if (cancelled || requestId !== pdfRenderRequestRef.current || !isCurrentSheetScope(scopeKey)) return;
+          drawOverlays();
+        }).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (cancelled || message.toLowerCase().includes("cancel")) return;
+          if (requestId !== pdfRenderRequestRef.current || !isCurrentSheetScope(scopeKey)) return;
+          setError(error instanceof Error ? error.message : "Failed to render PDF.");
+        });
       } else {
+        if (cancelled || requestId !== pdfRenderRequestRef.current || !isCurrentSheetScope(scopeKey)) return;
         drawOverlays();
       }
+    }).catch((error) => {
+      if (cancelled || requestId !== pdfRenderRequestRef.current || !isCurrentSheetScope(scopeKey)) return;
+      setError(error instanceof Error ? error.message : "Failed to render PDF.");
     });
+    return () => {
+      cancelled = true;
+      renderTask?.cancel();
+    };
   }, [
     pdfDoc,
     scale,
     drawInteractiveOverlays,
+    isCurrentSheetScope,
+    sheetScopeKey,
   ]);
 
   useEffect(() => {
