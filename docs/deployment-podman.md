@@ -29,11 +29,11 @@ podman compose -f infra/podman-compose.yml up -d
 - **app:** Django + Gunicorn, built frontend assets, port 8000.
 - **db:** PostgreSQL 16 (Alpine), persistent volume.
 
-Images are published to **GHCR** and **Docker Hub** on pushes to `feature/preconstruction-plan-annotation` (tags: commit SHA and `feature-latest`).
+Images are published to **GHCR** and **Docker Hub** on every push to **`main`** and to the feature branch (tags: commit SHA, `main-latest` on main, `feature-latest` on the feature branch). Use `APP_IMAGE=ghcr.io/rupret007/constructiondaily:main-latest` to run the latest main build without building locally.
 
 ## Admin deploy from GitHub
 
-Admins can deploy in two ways. **From GitHub:** Push to the feature branch to trigger the container workflow; if deploy secrets are set, the workflow will build the image, push to registries, and optionally SSH to the server to run `deploy.sh` (pull + up + migrations). **On the server:** Ensure `DEPLOY_PATH` and any required secrets are set, then run `./infra/podman/deploy.sh` from the deploy directory, or rely on the hourly timer to pull and restart when a new image is available. After deploy, smoke test with: `curl -sf http://localhost:8000/api/schema/` (or your host); expect HTTP 200.
+Admins can deploy in two ways. **From GitHub:** Push to `main` or the feature branch to trigger the container workflow; if deploy secrets are set, the workflow will build the image, push to registries, and optionally SSH to the server to run `deploy.sh` (pull + up + migrations). **On the server:** Ensure `DEPLOY_PATH` and any required secrets are set, then run `./infra/podman/deploy.sh` from the deploy directory, or rely on the hourly timer to pull and restart when a new image is available. After deploy, smoke test with: `curl -sf http://localhost:8000/api/schema/` (or your host); expect HTTP 200.
 
 ## Prerequisites
 

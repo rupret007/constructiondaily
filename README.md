@@ -30,28 +30,18 @@ The app includes a **Preconstruction** area for plan annotation and takeoff: upl
 
 ## Quick Start
 
-### API
+**Easiest (Windows):** From the repo root, run **`start.bat`**. It pulls the latest from GitHub (when you have a git clone), builds the app with Podman, and starts the stack. Then follow [Getting started](docs/getting-started.md) to create a user and sign in at **http://localhost:8000**.
 
-1. Create virtual environment in `apps/api`.
-2. Install dependencies:
-   - `pip install -r requirements.txt`
-3. Initialize database:
-   - `python manage.py migrate`
-4. Seed pilot users/project (optional):
-   - `python manage.py seed_demo_data`
-5. Give your own user Preconstruction access (optional): if you use `createsuperuser` and want to use the Preconstruction area, add that user to the demo project with a write role:
-   - `python manage.py add_user_to_demo <your_username>`
-6. Run API:
-   - `python manage.py runserver`
+**Linux/macOS:** See [Deployment with Podman](docs/deployment-podman.md) for `podman compose` commands; [Getting started](docs/getting-started.md) has the same user/sign-in steps.
 
-### Web
+**Pre-built image:** CI builds and pushes images on every push to `main` and the feature branch. You can use `ghcr.io/rupret007/constructiondaily:main-latest` (or `:feature-latest`) instead of building locally; set `APP_IMAGE` in `.env` and run the stack as in [Deployment with Podman](docs/deployment-podman.md).
 
-1. Install dependencies in `apps/web`:
-   - `npm install`
-2. Start development server:
-   - `npm run dev`
+### Run without containers (API + Web)
 
-For containerized run (app + Postgres), see [Deployment with Podman](docs/deployment-podman.md). **First time?** [Getting started](docs/getting-started.md) walks through running the stack, creating a user, and signing in. For local dev, run the API and Web steps above in two terminals.
+1. **API:** In `apps/api`: `pip install -r requirements.txt`, `python manage.py migrate`, optionally `python manage.py seed_demo_data`, then `python manage.py runserver`.
+2. **Web:** In `apps/web`: `npm install`, then `npm run dev`.
+3. To give your user Preconstruction access: `python manage.py add_user_to_demo <your_username>` (after `createsuperuser`).
+4. Open the URL shown by the web dev server and sign in.
 
 ## Security Notes
 
