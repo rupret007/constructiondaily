@@ -23,9 +23,9 @@ services:
   app:
     image: ${APP_IMAGE:-ghcr.io/rupret007/constructiondaily:feature-latest}
     build:
-      # One level up from compose file dir (infra) = repo root; avoid ../.. on Windows (resolves to drive root)
+      # context .. from compose file dir (infra) = repo root; use root Dockerfile for podman-compose
       context: ..
-      dockerfile: apps/api/Dockerfile
+      dockerfile: Dockerfile
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/construction_reports
       DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
