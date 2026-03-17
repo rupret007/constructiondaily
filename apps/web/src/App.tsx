@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Alert } from "./components/ui/alert";
 import { LoginForm } from "./components/LoginForm";
 import { NavBar, type AppArea } from "./components/NavBar";
@@ -6,13 +6,21 @@ import { OfflineBadge } from "./components/OfflineBadge";
 import { ReportDetail } from "./components/ReportDetail";
 import { ReportList } from "./components/ReportList";
 import { useOfflineSync } from "./hooks/useOfflineSync";
-import { PreconstructionDashboard } from "./preconstruction/PreconstructionDashboard";
-import { SheetViewer } from "./preconstruction/SheetViewer";
 import { enqueueMutation } from "./offline/queue";
 import { getSession, login, logout } from "./services/auth";
 import { fetchProjects } from "./services/projects";
 import { createReport, fetchReport, fetchReports, syncWeather, transitionReport, updateReport } from "./services/reports";
 import type { ApiUser, DailyReport, Project } from "./types/api";
+
+const PreconstructionDashboard = lazy(async () => {
+  const module = await import("./preconstruction/PreconstructionDashboard");
+  return { default: module.PreconstructionDashboard };
+});
+
+const SheetViewer = lazy(async () => {
+  const module = await import("./preconstruction/SheetViewer");
+  return { default: module.SheetViewer };
+});
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) {
@@ -152,33 +160,35 @@ export default function App() {
         </Alert>
       )}
       {area === "preconstruction" ? (
-        preconstructionSheetId ? (
-          <SheetViewer
-            sheetId={preconstructionSheetId}
-            planSetId={preconstructionPlanSetId ?? ""}
-            onBack={() => {
-              setPreconstructionSheetId(null);
-              setPreconstructionPlanSetId(null);
-            }}
-          />
-        ) : (
-          <PreconstructionDashboard
-            projectId={selectedProjectId}
-            projects={projects}
-            selectedProjectId={selectedProjectId}
-            onProjectChange={(projectId) => {
-              setSelectedProjectId(projectId);
-              setError("");
-            }}
-            onOpenSheet={(sheetId, planSetId) => {
-              setPreconstructionSheetId(sheetId);
-              setPreconstructionPlanSetId(planSetId);
-            }}
-            error={error}
-            onClearError={() => setError("")}
-            onError={setError}
-          />
-        )
+        <Suspense fallback={<div className="rounded-md border border-border bg-card px-4 py-6 text-sm text-muted-foreground">Loading preconstruction workspace...</div>}>
+          {preconstructionSheetId ? (
+            <SheetViewer
+              sheetId={preconstructionSheetId}
+              planSetId={preconstructionPlanSetId ?? ""}
+              onBack={() => {
+                setPreconstructionSheetId(null);
+                setPreconstructionPlanSetId(null);
+              }}
+            />
+          ) : (
+            <PreconstructionDashboard
+              projectId={selectedProjectId}
+              projects={projects}
+              selectedProjectId={selectedProjectId}
+              onProjectChange={(projectId) => {
+                setSelectedProjectId(projectId);
+                setError("");
+              }}
+              onOpenSheet={(sheetId, planSetId) => {
+                setPreconstructionSheetId(sheetId);
+                setPreconstructionPlanSetId(planSetId);
+              }}
+              error={error}
+              onClearError={() => setError("")}
+              onError={setError}
+            />
+          )}
+        </Suspense>
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,40%)_1fr]">
           <ReportList
