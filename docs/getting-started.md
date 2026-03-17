@@ -10,6 +10,8 @@ From the repo root, run:
 start.bat
 ```
 
+When run from a git clone, the script pulls the latest from GitHub and then builds and starts the app, so you always get the latest version. Set `SKIP_PULL=1` to skip the pull step.
+
 On Linux/macOS:
 
 ```bash

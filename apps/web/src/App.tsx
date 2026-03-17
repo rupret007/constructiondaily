@@ -9,8 +9,13 @@ import { useOfflineSync } from "./hooks/useOfflineSync";
 import { enqueueMutation } from "./offline/queue";
 import { getSession, login, logout } from "./services/auth";
 import { fetchProjects } from "./services/projects";
+import { ApiRequestError } from "./services/api";
 import { createReport, fetchReport, fetchReports, syncWeather, transitionReport, updateReport } from "./services/reports";
 import type { ApiUser, DailyReport, Project } from "./types/api";
+
+function isUnauthorized(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.status === 401;
+}
 
 const PreconstructionDashboard = lazy(async () => {
   const module = await import("./preconstruction/PreconstructionDashboard");
@@ -90,6 +95,10 @@ export default function App() {
 
   useEffect(() => {
     void loadSessionAndProjects().catch((err) => {
+      if (isUnauthorized(err)) {
+        resetAppState();
+        return;
+      }
       setError(getErrorMessage(err, "Failed to load session."));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,6 +113,10 @@ export default function App() {
   useEffect(() => {
     if (!selectedProjectId) return;
     void loadReports(selectedProjectId).catch((err) => {
+      if (isUnauthorized(err)) {
+        resetAppState();
+        return;
+      }
       setError(getErrorMessage(err, "Failed to load reports."));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -218,12 +231,20 @@ export default function App() {
                 await loadReports(selectedProjectId);
               }
             } catch (err) {
+              if (isUnauthorized(err)) {
+                resetAppState();
+                return;
+              }
               setError(getErrorMessage(err, "Failed to create report."));
             }
           }}
           onSelectReport={(reportId) => {
             setError("");
             void refreshSelectedReport(reportId).catch((err) => {
+              if (isUnauthorized(err)) {
+                resetAppState();
+                return;
+              }
               setError(getErrorMessage(err, "Failed to load selected report."));
             });
           }}
@@ -246,6 +267,10 @@ export default function App() {
                 await refreshSelectedReport(selectedReport.id);
               }
             } catch (err) {
+              if (isUnauthorized(err)) {
+                resetAppState();
+                return;
+              }
               setError(getErrorMessage(err, "Failed to save report changes."));
             }
           }}
@@ -265,6 +290,10 @@ export default function App() {
                 await refreshSelectedReport(selectedReport.id);
               }
             } catch (err) {
+              if (isUnauthorized(err)) {
+                resetAppState();
+                return;
+              }
               setError(getErrorMessage(err, "Failed to update report status."));
             }
           }}
@@ -275,6 +304,10 @@ export default function App() {
               await syncWeather(selectedReport.id);
               await refreshSelectedReport(selectedReport.id);
             } catch (err) {
+              if (isUnauthorized(err)) {
+                resetAppState();
+                return;
+              }
               setError(getErrorMessage(err, "Failed to sync weather."));
             }
           }}

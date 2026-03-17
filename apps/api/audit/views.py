@@ -20,9 +20,11 @@ class AuditEventViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         if user.is_superuser:
             return self.queryset
 
-        allowed_projects = ProjectMembership.objects.filter(
-            user=user,
-            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.PROJECT_MANAGER],
-            is_active=True,
-        ).values_list("project_id", flat=True)
-        return self.queryset.filter(project_id__in=allowed_projects)
+        allowed_projects = list(
+            ProjectMembership.objects.filter(
+                user=user,
+                role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.PROJECT_MANAGER],
+                is_active=True,
+            ).values_list("project_id", flat=True)
+        )
+        return self.queryset.filter(project_id__in=[str(pid) for pid in allowed_projects])

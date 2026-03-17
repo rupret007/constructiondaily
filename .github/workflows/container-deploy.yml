@@ -1,10 +1,10 @@
-# Build app image on feature branch, push to GHCR + Docker Hub, optionally deploy via SSH.
-# Branch: feature/preconstruction-plan-annotation only.
+# Build app image on main and feature branch, push to GHCR + Docker Hub, optionally deploy via SSH.
 name: Container build and deploy
 
 on:
   push:
     branches:
+      - main
       - feature/preconstruction-plan-annotation
 
 env:
@@ -35,7 +35,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME_GHCR }}
           tags: |
-            type=raw,value=feature-latest
+            type=raw,value=${{ github.ref_name == 'main' && 'main-latest' || 'feature-latest' }}
             type=sha,prefix=
 
       - name: Log in to GHCR
@@ -53,7 +53,7 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_NAME_GHCR }}:${{ github.sha }}
-            ${{ env.IMAGE_NAME_GHCR }}:feature-latest
+            ${{ env.IMAGE_NAME_GHCR }}:${{ github.ref_name == 'main' && 'main-latest' || 'feature-latest' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -61,10 +61,10 @@ jobs:
         if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin docker.io
-          docker pull ${{ env.IMAGE_NAME_GHCR }}:feature-latest
-          docker tag ${{ env.IMAGE_NAME_GHCR }}:feature-latest ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:feature-latest
+          docker pull ${{ env.IMAGE_NAME_GHCR }}:${{ github.ref_name == 'main' && 'main-latest' || 'feature-latest' }}
+          docker tag ${{ env.IMAGE_NAME_GHCR }}:${{ github.ref_name == 'main' && 'main-latest' || 'feature-latest' }} ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:${{ github.ref_name == 'main' && 'main-latest' || 'feature-latest' }}
           docker tag ${{ env.IMAGE_NAME_GHCR }}:${{ github.sha }} ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:${{ github.sha }}
-          docker push ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:feature-latest
+          docker push ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:${{ github.ref_name == 'main' && 'main-latest' || 'feature-latest' }}
           docker push ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:${{ github.sha }}
 
   deploy:

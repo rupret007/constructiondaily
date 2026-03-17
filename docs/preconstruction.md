@@ -118,11 +118,10 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 - OCR fallback is heuristic and only runs on sparse-text PDF pages; poor scans can still fail or produce noisy text.
 - Retrieval is still deterministic and citation-first, but now includes scope/type/recency weighting rather than plain token count alone.
 - Voice input/output depends on browser speech APIs and gracefully falls back to typed interaction where unsupported.
-- The copilot still does not support structured revision diffs.
-- Snapshot diff is available via API (`snapshots/diff/`) and copilot (“what changed since the last snapshot?”); a dedicated diff/compare UI screen is optional.
+- Snapshot diff is available via API (`snapshots/diff/`) and copilot (“what changed since the last snapshot?”); the Compare UI and copilot support structured revision diffs (e.g. "what changed since the last snapshot?").
 - PDF export generates a takeoff summary PDF (plan set name, capture time, table of sheet/category/unit/quantity).
 
-**Future (roadmap):** Possible next steps include project- or org-level rules (e.g. "door = doors + door_hardware") and exporting accepted/edited suggestions as labeled data for provider calibration or fine-tuning. No implementation commitment yet.
+**Future (roadmap):** Project-level takeoff rules and feedback export are in place. Possible next steps could include org-level rules, further provider tuning, or other enhancements. No implementation commitment yet.
 
 ## AI provider configuration
 

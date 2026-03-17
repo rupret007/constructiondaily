@@ -35,7 +35,7 @@ Set before running in production:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DJANGO_DEBUG` | Yes | Must be `false` |
-| `DJANGO_SECRET_KEY` | Yes | Long random string (e.g. 50+ chars) |
+| `DJANGO_SECRET_KEY` | Yes | Long random string (e.g. 50+ chars). **Required in production.** If unset when `DJANGO_DEBUG` is false, the app will not start; if unset in dev, each process gets a random key and sessions/signed data break across restarts. |
 | `DJANGO_ALLOWED_HOSTS` | Yes | Comma-separated hosts (e.g. `yourdomain.com,www.yourdomain.com`) |
 | `DATABASE_URL` | For Postgres | `postgres://user:pass@host:5432/dbname` |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, etc. | If using Postgres | See `.env.example` |

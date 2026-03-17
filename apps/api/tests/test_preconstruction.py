@@ -2828,6 +2828,24 @@ class PreconstructionAPITests(TestCase):
         record = ExportRecord.objects.get(plan_set=plan_set, export_type="pdf_metadata")
         self.assertEqual(record.status, ExportRecord.Status.GENERATED)
 
+    def test_copilot_query_missing_project_returns_400(self):
+        self.client.login(username="estimator1", password="test-pass")
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {"question": "how many doors?"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_copilot_query_blank_question_returns_400(self):
+        self.client.login(username="estimator1", password="test-pass")
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {"project": str(self.project.id), "question": "   "},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+
     def test_preconstruction_copilot_returns_grounded_takeoff_answer(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(

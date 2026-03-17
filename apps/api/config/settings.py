@@ -5,11 +5,18 @@ import secrets
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY") or secrets.token_urlsafe(64)
+_secret = os.getenv("DJANGO_SECRET_KEY")
+if not DEBUG and not _secret:
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be set in production (when DJANGO_DEBUG is false). "
+        "Omitting it causes a new random key per process and invalidates sessions and signed data across restarts."
+    )
+SECRET_KEY = _secret or secrets.token_urlsafe(64)
 
 ALLOWED_HOSTS = [host for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if host]
 

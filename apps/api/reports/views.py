@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from django.db import transaction
+from django.db.models import Prefetch
 from django.http import HttpResponse
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -15,7 +16,15 @@ from rest_framework.response import Response
 from audit.services import get_request_audit_context, record_audit_event
 from core.models import ProjectMembership
 from core.permissions import user_has_project_role
-from reports.models import DailyReport, DelayEntry, EquipmentEntry, LaborEntry, MaterialEntry, WorkLogEntry
+from reports.models import (
+    ApprovalAction,
+    DailyReport,
+    DelayEntry,
+    EquipmentEntry,
+    LaborEntry,
+    MaterialEntry,
+    WorkLogEntry,
+)
 from reports.pdf import build_report_pdf
 from reports.serializers import (
     DailyReportDetailSerializer,
@@ -41,7 +50,20 @@ class DailyReportViewSet(viewsets.ModelViewSet):
         memberships = ProjectMembership.objects.filter(user=self.request.user, is_active=True).values_list(
             "project_id", flat=True
         )
-        return self.queryset.filter(project_id__in=memberships)
+        qs = self.queryset.filter(project_id__in=memberships)
+        if self.action == "retrieve":
+            qs = qs.prefetch_related(
+                "laborentry_set",
+                "equipmententry_set",
+                "materialentry_set",
+                "worklogentry_set",
+                "delayentry_set",
+                "safety_entries",
+                "attachments",
+                Prefetch("approval_actions", queryset=ApprovalAction.objects.select_related("actor")),
+                "snapshots",
+            )
+        return qs
 
     def get_serializer_class(self):
         if self.action == "retrieve":

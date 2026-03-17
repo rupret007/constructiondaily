@@ -16,7 +16,8 @@ htmlcov/
 .venv/
 venv/
 
-# Django
+# Django / env
+.env
 db.sqlite3
 media/
 staticfiles/

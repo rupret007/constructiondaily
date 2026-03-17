@@ -10,7 +10,7 @@ From the repo root, run:
 start.bat
 ```
 
-That creates `.env` from `.env.example` if needed, builds the app image, and starts the stack. The API is at **http://localhost:8000**. No need to edit `.env` for local dev (defaults are dev-only).
+When run from a git clone, the script pulls the latest from GitHub, then creates `.env` from `.env.example` if needed, builds the app image, and starts the stack. The API is at **http://localhost:8000**. No need to edit `.env` for local dev (defaults are dev-only).
 
 To stop: `podman compose -f infra/podman-compose.yml down`
 
@@ -57,7 +57,7 @@ Copy `.env.example` to `.env` in the **deploy directory** (repo root or `DEPLOY_
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `POSTGRES_PASSWORD` | Yes | DB password (match `DATABASE_URL`). Avoid `#`, `@`, `:` or `%`; or URL-encode if you set `DATABASE_URL` by hand. |
-| `DJANGO_SECRET_KEY` | Yes | Long random string |
+| `DJANGO_SECRET_KEY` | Yes | Long random string. **Required when `DJANGO_DEBUG` is false;** the app will not start without it. Omitting it in production causes session and signing breakage. |
 | `APP_IMAGE` | No | Full image:tag (default: `ghcr.io/rupret007/constructiondaily:feature-latest`) |
 | `APP_PORT` | No | Host port for app (default: 8000) |
 | `DJANGO_DEBUG` | No | `false` in production |

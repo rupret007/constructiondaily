@@ -6,8 +6,12 @@ from rest_framework.test import APIClient
 
 from audit.models import AuditEvent
 from core.models import Project, ProjectMembership
-from reports.models import DailyReport, ReportSnapshot
-from reports.models import ApprovalAction
+from reports.models import (
+    ApprovalAction,
+    DailyReport,
+    LaborEntry,
+    ReportSnapshot,
+)
 
 
 class ReportWorkflowTests(TestCase):
@@ -68,6 +72,24 @@ class ReportWorkflowTests(TestCase):
 
         blocked_update = self.client.patch(f"/api/reports/daily/{report_id}/", {"summary": "change"}, format="json")
         self.assertEqual(blocked_update.status_code, 403)
+
+    def test_report_retrieve_query_count(self):
+        """Retrieve report detail should use prefetch_related and not N+1."""
+        report_id = self._create_report()
+        report = DailyReport.objects.get(pk=report_id)
+        LaborEntry.objects.create(
+            report=report, trade="Carpenter", company="ABC", workers=2, notes=""
+        )
+        self.client.login(username="super1", password="test-pass")
+        self.client.post(f"/api/reports/daily/{report_id}/submit/", {}, format="json")
+        self.client.logout()
+        self.client.login(username="pm1", password="test-pass")
+        with self.assertNumQueries(12):
+            response = self.client.get(f"/api/reports/daily/{report_id}/")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("labor_entries", data)
+        self.assertIn("approval_actions", data)
 
     def test_reject_from_reviewed_returns_to_draft(self):
         report_id = self._create_report()

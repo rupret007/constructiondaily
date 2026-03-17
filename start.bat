@@ -24,6 +24,23 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if not "%SKIP_PULL%"=="1" if exist .git (
+  echo Pulling latest...
+  git pull
+  if errorlevel 1 (
+    echo Pull failed or skipped; using current files.
+  )
+  echo.
+)
+if "%SKIP_PULL%"=="1" if exist .git (
+  echo Skipping pull (SKIP_PULL=1).
+  echo.
+)
+if not exist .git (
+  echo Not a git repo, skipping pull.
+  echo.
+)
+
 if not exist .env (
   echo Creating .env from .env.example...
   copy .env.example .env >nul
