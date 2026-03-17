@@ -108,15 +108,40 @@ class ProjectMembershipViewSet(
     filterset_fields = ("project", "role", "is_active")
     ordering_fields = ("created_at", "updated_at")
 
-    def _can_manage_memberships(self, project_id: str) -> bool:
+    def _is_admin_for_project(self, project_id: str) -> bool:
         if self.request.user.is_superuser:
             return True
         return ProjectMembership.objects.filter(
             user=self.request.user,
             project_id=project_id,
-            role__in=[ProjectMembership.Role.ADMIN, ProjectMembership.Role.PROJECT_MANAGER],
+            role=ProjectMembership.Role.ADMIN,
             is_active=True,
         ).exists()
+
+    def _is_project_manager_for_project(self, project_id: str) -> bool:
+        if self.request.user.is_superuser:
+            return True
+        return ProjectMembership.objects.filter(
+            user=self.request.user,
+            project_id=project_id,
+            role=ProjectMembership.Role.PROJECT_MANAGER,
+            is_active=True,
+        ).exists()
+
+    def _can_manage_membership(
+        self,
+        project_id: str,
+        current_role: str | None = None,
+        target_role: str | None = None,
+    ) -> bool:
+        if self.request.user.is_superuser or self._is_admin_for_project(project_id):
+            return True
+        if not self._is_project_manager_for_project(project_id):
+            return False
+        protected_roles = {ProjectMembership.Role.ADMIN, ProjectMembership.Role.PROJECT_MANAGER}
+        if current_role in protected_roles or target_role in protected_roles:
+            return False
+        return True
 
     def get_queryset(self):
         user = self.request.user
@@ -131,7 +156,8 @@ class ProjectMembershipViewSet(
 
     def perform_create(self, serializer):
         project = serializer.validated_data["project"]
-        if not self._can_manage_memberships(str(project.id)):
+        target_role = serializer.validated_data["role"]
+        if not self._can_manage_membership(str(project.id), target_role=target_role):
             from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied("Admin or Project Manager role is required.")
@@ -139,14 +165,23 @@ class ProjectMembershipViewSet(
 
     def perform_update(self, serializer):
         membership = self.get_object()
-        if not self._can_manage_memberships(str(membership.project_id)):
+        target_role = serializer.validated_data.get("role", membership.role)
+        if not self._can_manage_membership(
+            str(membership.project_id),
+            current_role=membership.role,
+            target_role=target_role,
+        ):
             from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied("Admin or Project Manager role is required.")
         serializer.save()
 
     def perform_destroy(self, instance):
-        if not self._can_manage_memberships(str(instance.project_id)):
+        if not self._can_manage_membership(
+            str(instance.project_id),
+            current_role=instance.role,
+            target_role=instance.role,
+        ):
             from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied("Admin or Project Manager role is required.")

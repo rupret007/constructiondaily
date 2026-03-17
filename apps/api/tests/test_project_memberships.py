@@ -11,6 +11,7 @@ class ProjectMembershipGuardTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.admin_user = User.objects.create_user(username="pm_admin", password="test-pass")
+        self.pm_user = User.objects.create_user(username="pm_manager", password="test-pass")
         self.worker_user = User.objects.create_user(username="pm_worker", password="test-pass")
         self.other_user = User.objects.create_user(username="pm_other", password="test-pass")
         self.superuser = User.objects.create_superuser(
@@ -24,6 +25,11 @@ class ProjectMembershipGuardTests(TestCase):
             user=self.admin_user,
             project=self.project_a,
             role=ProjectMembership.Role.ADMIN,
+        )
+        ProjectMembership.objects.create(
+            user=self.pm_user,
+            project=self.project_a,
+            role=ProjectMembership.Role.PROJECT_MANAGER,
         )
         self.worker_membership = ProjectMembership.objects.create(
             user=self.worker_user,
@@ -85,3 +91,38 @@ class ProjectMembershipGuardTests(TestCase):
                 role=ProjectMembership.Role.SUPERINTENDENT,
             ).exists()
         )
+
+    def test_project_manager_cannot_create_admin_membership(self):
+        self.client.login(username="pm_manager", password="test-pass")
+        response = self.client.post(
+            "/api/projects/memberships/",
+            {
+                "project": str(self.project_a.id),
+                "user_id": self.other_user.id,
+                "role": ProjectMembership.Role.ADMIN,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_project_manager_cannot_promote_membership_to_project_manager(self):
+        self.client.login(username="pm_manager", password="test-pass")
+        response = self.client.patch(
+            f"/api/projects/memberships/{self.worker_membership.id}/",
+            {"role": ProjectMembership.Role.PROJECT_MANAGER},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.worker_membership.refresh_from_db()
+        self.assertEqual(self.worker_membership.role, ProjectMembership.Role.FOREMAN)
+
+    def test_project_manager_cannot_delete_admin_membership(self):
+        admin_membership = ProjectMembership.objects.get(
+            user=self.admin_user,
+            project=self.project_a,
+            role=ProjectMembership.Role.ADMIN,
+        )
+        self.client.login(username="pm_manager", password="test-pass")
+        response = self.client.delete(f"/api/projects/memberships/{admin_membership.id}/")
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(ProjectMembership.objects.filter(id=admin_membership.id).exists())

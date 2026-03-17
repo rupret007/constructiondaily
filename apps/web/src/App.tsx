@@ -31,7 +31,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [preconstructionSheetId, setPreconstructionSheetId] = useState<string | null>(null);
   const [preconstructionPlanSetId, setPreconstructionPlanSetId] = useState<string | null>(null);
-  const { isOnline, lastFlushedCount, queuedCount } = useOfflineSync();
+  const { isOnline, lastFlushedCount, lastFlushId, queuedCount } = useOfflineSync();
 
   async function loadSessionAndProjects() {
     const session = await getSession();
@@ -85,7 +85,7 @@ export default function App() {
       setError(getErrorMessage(err, "Failed to load reports."));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProjectId, lastFlushedCount]);
+  }, [selectedProjectId, lastFlushId]);
 
   async function refreshSelectedReport(reportId: string) {
     const report = await fetchReport(reportId);

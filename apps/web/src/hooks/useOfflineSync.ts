@@ -5,6 +5,7 @@ import { flushMutationQueue } from "../offline/queue";
 export function useOfflineSync() {
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [lastFlushedCount, setLastFlushedCount] = useState(0);
+  const [lastFlushId, setLastFlushId] = useState(0);
   const [queuedCount, setQueuedCount] = useState(0);
 
   useEffect(() => {
@@ -13,6 +14,9 @@ export function useOfflineSync() {
       if (navigator.onLine) {
         const count = await flushMutationQueue();
         setLastFlushedCount(count);
+        if (count > 0) {
+          setLastFlushId((current) => current + 1);
+        }
       }
       setQueuedCount(await countMutations());
     };
@@ -37,5 +41,5 @@ export function useOfflineSync() {
     };
   }, []);
 
-  return { isOnline, lastFlushedCount, queuedCount };
+  return { isOnline, lastFlushedCount, lastFlushId, queuedCount };
 }
