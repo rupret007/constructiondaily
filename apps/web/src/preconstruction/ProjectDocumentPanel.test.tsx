@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectDocumentPanel } from "./ProjectDocumentPanel";
 
@@ -11,6 +11,16 @@ vi.mock("../services/preconstruction", () => ({
   uploadProjectDocument: (...args: unknown[]) => uploadProjectDocument(...args),
   projectDocumentFileUrl: (documentId: string) => `/api/preconstruction/documents/${documentId}/file/`,
 }));
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("ProjectDocumentPanel", () => {
   beforeEach(() => {
@@ -145,5 +155,84 @@ describe("ProjectDocumentPanel", () => {
 
     expect(await screen.findByText("Broken Spec")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /unavailable/i })).toBeDisabled();
+  });
+
+  it("clears stale documents and ignores old responses when scope changes", async () => {
+    const secondLoad = createDeferred<
+      Array<{
+        id: string;
+        project: string;
+        plan_set: string | null;
+        title: string;
+        document_type: "spec";
+        original_filename: string;
+        storage_key: string;
+        mime_type: string;
+        file_extension: string;
+        size_bytes: number;
+        page_count: number;
+        parse_status: "parsed";
+        parse_error: string;
+        created_at: string;
+        updated_at: string;
+      }>
+    >();
+    fetchProjectDocuments
+      .mockResolvedValueOnce([
+        {
+          id: "doc-4",
+          project: "project-1",
+          plan_set: "set-1",
+          title: "Door Hardware Spec",
+          document_type: "spec",
+          original_filename: "door-spec.pdf",
+          storage_key: "project_documents/project-1/set-1/doc.pdf",
+          mime_type: "application/pdf",
+          file_extension: "pdf",
+          size_bytes: 1000,
+          page_count: 2,
+          parse_status: "parsed",
+          parse_error: "",
+          created_at: "2026-03-13T12:00:00Z",
+          updated_at: "2026-03-13T12:00:00Z",
+        },
+      ])
+      .mockImplementationOnce(() => secondLoad.promise);
+
+    const { rerender } = render(
+      <ProjectDocumentPanel
+        projectId="project-1"
+        planSetId="set-1"
+        planSetName="Pricing Set"
+      />
+    );
+
+    expect(await screen.findByText("Door Hardware Spec")).toBeInTheDocument();
+
+    rerender(<ProjectDocumentPanel projectId="project-2" />);
+
+    await waitFor(() => expect(screen.queryByText("Door Hardware Spec")).not.toBeInTheDocument());
+
+    secondLoad.resolve([
+      {
+        id: "doc-5",
+        project: "project-2",
+        plan_set: null,
+        title: "Project Two Spec",
+        document_type: "spec",
+        original_filename: "project-two.pdf",
+        storage_key: "project_documents/project-2/project/project-two.pdf",
+        mime_type: "application/pdf",
+        file_extension: "pdf",
+        size_bytes: 1000,
+        page_count: 1,
+        parse_status: "parsed",
+        parse_error: "",
+        created_at: "2026-03-13T12:00:00Z",
+        updated_at: "2026-03-13T12:00:00Z",
+      },
+    ]);
+
+    expect(await screen.findByText("Project Two Spec")).toBeInTheDocument();
   });
 });

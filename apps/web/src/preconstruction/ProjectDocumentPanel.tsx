@@ -35,14 +35,27 @@ export function ProjectDocumentPanel({ projectId, planSetId, planSetName }: Prop
   const [documentType, setDocumentType] = useState<ProjectDocument["document_type"]>("spec");
   const [scopeMode, setScopeMode] = useState<"project" | "plan_set">(planSetId ? "plan_set" : "project");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     setScopeMode(planSetId ? "plan_set" : "project");
   }, [planSetId]);
 
+  useEffect(() => {
+    requestIdRef.current += 1;
+    setDocuments([]);
+    setError("");
+    if (!projectId) {
+      setLoading(false);
+    }
+  }, [planSetId, projectId]);
+
   const loadDocuments = useCallback(async () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     if (!projectId) {
       setDocuments([]);
+      setLoading(false);
       return;
     }
     setLoading(true);
@@ -51,12 +64,15 @@ export function ProjectDocumentPanel({ projectId, planSetId, planSetName }: Prop
         planSetId,
         scopedToPlanSet: Boolean(planSetId),
       });
+      if (requestId !== requestIdRef.current) return;
       setDocuments(list);
       setError("");
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load project documents.");
       setDocuments([]);
     } finally {
+      if (requestId !== requestIdRef.current) return;
       setLoading(false);
     }
   }, [projectId, planSetId]);
@@ -71,6 +87,7 @@ export function ProjectDocumentPanel({ projectId, planSetId, planSetName }: Prop
       return;
     }
     setUploading(true);
+    setError("");
     try {
       await uploadProjectDocument(projectId, file, {
         document_type: documentType,
@@ -172,8 +189,8 @@ export function ProjectDocumentPanel({ projectId, planSetId, planSetName }: Prop
                   <div className="min-w-0">
                     <p className="font-medium text-foreground">{document.title}</p>
                     <p className="text-xs text-muted-foreground">
-                      {DOCUMENT_TYPE_LABELS[document.document_type]} · {scopeLabel} · {document.parse_status}
-                      {document.page_count ? ` · ${document.page_count} page${document.page_count === 1 ? "" : "s"}` : ""}
+                      {DOCUMENT_TYPE_LABELS[document.document_type]} | {scopeLabel} | {document.parse_status}
+                      {document.page_count ? ` | ${document.page_count} page${document.page_count === 1 ? "" : "s"}` : ""}
                     </p>
                     {document.parse_error ? (
                       <p className="text-xs text-destructive">{document.parse_error}</p>
@@ -197,3 +214,4 @@ export function ProjectDocumentPanel({ projectId, planSetId, planSetName }: Prop
     </Card>
   );
 }
+

@@ -10,6 +10,16 @@ vi.mock("../services/preconstruction", () => ({
   queryPreconstructionCopilot: (...args: unknown[]) => queryPreconstructionCopilot(...args),
 }));
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("PreconstructionCopilotPanel", () => {
   let speak: ReturnType<typeof vi.fn>;
 
@@ -123,5 +133,70 @@ describe("PreconstructionCopilotPanel", () => {
     expect(await screen.findByText(/i found 5 calibrated sheets in pricing set/i)).toBeInTheDocument();
     await waitFor(() => expect(speak).toHaveBeenCalledTimes(1));
     expect(speak.mock.calls[0][0].text).toBe("I found 5 calibrated sheets in Pricing Set.");
+  });
+
+  it("ignores stale replies after the copilot scope changes", async () => {
+    const firstReply = createDeferred<{
+      status: "grounded";
+      answer: string;
+      scope: {
+        project_id: string;
+        project_code: string;
+        project_name: string;
+        plan_set_id: string;
+        plan_set_name: string;
+        plan_sheet_id: null;
+        plan_sheet_name: null;
+      };
+      citations: [];
+      suggested_prompts: [];
+    }>();
+    queryPreconstructionCopilot.mockImplementationOnce(() => firstReply.promise);
+
+    const { rerender } = render(
+      <PreconstructionCopilotPanel
+        projectId="project-1"
+        projectLabel="BID-1 - Building A"
+        planSetId="set-1"
+        planSetName="Pricing Set"
+      />
+    );
+
+    await userEvent.type(screen.getByLabelText(/ask estimator copilot/i), "How many pending doors?");
+    await userEvent.click(screen.getByRole("button", { name: /^ask$/i }));
+
+    expect(screen.getByText("How many pending doors?")).toBeInTheDocument();
+
+    rerender(
+      <PreconstructionCopilotPanel
+        projectId="project-1"
+        projectLabel="BID-1 - Building A"
+        planSetId="set-2"
+        planSetName="Addendum Set"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/ask about plan set addendum set/i)).toBeInTheDocument();
+      expect(screen.queryByText("How many pending doors?")).not.toBeInTheDocument();
+    });
+
+    firstReply.resolve({
+      status: "grounded",
+      answer: "Old scope answer",
+      scope: {
+        project_id: "project-1",
+        project_code: "BID-1",
+        project_name: "Building A",
+        plan_set_id: "set-1",
+        plan_set_name: "Pricing Set",
+        plan_sheet_id: null,
+        plan_sheet_name: null,
+      },
+      citations: [],
+      suggested_prompts: [],
+    });
+
+    await waitFor(() => expect(screen.queryByText("Old scope answer")).not.toBeInTheDocument());
   });
 });

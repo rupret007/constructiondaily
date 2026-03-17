@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { queryPreconstructionCopilot } from "../services/preconstruction";
 import type { PreconstructionCopilotCitation, PreconstructionCopilotResponse } from "../types/api";
 import { useBrowserVoiceCopilot } from "./useBrowserVoiceCopilot";
@@ -39,6 +39,16 @@ function statusLabel(status?: PreconstructionCopilotResponse["status"]): string 
   return "Grounded";
 }
 
+function buildWelcomeMessage(sheetLabel: string): CopilotMessage {
+  return {
+    id: createMessageId(),
+    role: "assistant",
+    status: "limited",
+    content:
+      `Ask me to run analysis on ${sheetLabel}, accept high-confidence suggestions, create a takeoff package from the selected annotation, create a snapshot, or export this plan set.`,
+  };
+}
+
 export function SheetCopilotPanel({
   projectId,
   planSetId,
@@ -53,20 +63,13 @@ export function SheetCopilotPanel({
   onCreateSnapshot,
   onExport,
 }: Props) {
-  const [messages, setMessages] = useState<CopilotMessage[]>([
-    {
-      id: createMessageId(),
-      role: "assistant",
-      status: "limited",
-      content:
-        "Ask me to run analysis on this sheet, accept high-confidence suggestions, create a takeoff package from the selected annotation, create a snapshot, or export this plan set.",
-    },
-  ]);
+  const [messages, setMessages] = useState<CopilotMessage[]>(() => [buildWelcomeMessage(sheetLabel)]);
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(false);
   const [pendingSpokenReply, setPendingSpokenReply] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   const quickPrompts = useMemo(
     () => [
@@ -78,13 +81,6 @@ export function SheetCopilotPanel({
     ],
     [selectedAnnotationId, sheetLabel]
   );
-
-  useEffect(() => {
-    setVoiceRepliesEnabled(false);
-    setPendingSpokenReply(null);
-    setQuestion("");
-    setError("");
-  }, [planSetId, projectId, sheetId]);
 
   const latestAssistantMessage = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -125,6 +121,8 @@ export function SheetCopilotPanel({
   const submitQuestion = useCallback(async (promptOverride?: string) => {
     const prompt = (promptOverride ?? question).trim();
     if (!prompt || loading) return;
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
 
     const userMessage: CopilotMessage = {
       id: createMessageId(),
@@ -146,6 +144,7 @@ export function SheetCopilotPanel({
         provider_name: analysisProvider,
         question: prompt,
       });
+      if (requestId !== requestIdRef.current) return;
 
       let content = response.answer;
       if (response.action_plan) {
@@ -168,8 +167,10 @@ export function SheetCopilotPanel({
         setPendingSpokenReply(assistantMessage.content);
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to run sheet copilot command.");
     } finally {
+      if (requestId !== requestIdRef.current) return;
       setLoading(false);
     }
   }, [
@@ -205,6 +206,19 @@ export function SheetCopilotPanel({
       setQuestion(transcript);
     },
   });
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    stopListening();
+    stopSpeaking();
+    clearVoiceError();
+    setMessages([buildWelcomeMessage(sheetLabel)]);
+    setVoiceRepliesEnabled(false);
+    setPendingSpokenReply(null);
+    setQuestion("");
+    setError("");
+    setLoading(false);
+  }, [clearVoiceError, planSetId, projectId, sheetId, sheetLabel, stopListening, stopSpeaking]);
 
   useEffect(() => {
     if (!voiceRepliesEnabled || !pendingSpokenReply) return;

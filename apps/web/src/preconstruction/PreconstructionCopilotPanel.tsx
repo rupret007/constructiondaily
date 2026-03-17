@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -66,15 +66,7 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
   const [error, setError] = useState("");
   const [voiceRepliesEnabled, setVoiceRepliesEnabled] = useState(false);
   const [pendingSpokenReply, setPendingSpokenReply] = useState<string | null>(null);
-
-  useEffect(() => {
-    setMessages([buildWelcomeMessage(projectLabel, planSetName)]);
-    setQuestion("");
-    setError("");
-    setLoading(false);
-    setVoiceRepliesEnabled(false);
-    setPendingSpokenReply(null);
-  }, [projectId, projectLabel, planSetId, planSetName]);
+  const requestIdRef = useRef(0);
 
   const latestSuggestedPrompts = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -101,6 +93,8 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
     if (!projectId || !prompt || loading) {
       return;
     }
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
 
     const userMessage: CopilotMessage = {
       id: createMessageId(),
@@ -119,6 +113,7 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
         plan_set: planSetId ?? null,
         question: prompt,
       });
+      if (requestId !== requestIdRef.current) return;
       const assistantMessage: CopilotMessage = {
         id: createMessageId(),
         role: "assistant",
@@ -135,8 +130,10 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
         setPendingSpokenReply(assistantMessage.content);
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to query estimator copilot.");
     } finally {
+      if (requestId !== requestIdRef.current) return;
       setLoading(false);
     }
   }, [loading, planSetId, projectId, question, voiceRepliesEnabled]);
@@ -162,6 +159,19 @@ export function PreconstructionCopilotPanel({ projectId, projectLabel, planSetId
       setQuestion(transcript);
     },
   });
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    stopListening();
+    stopSpeaking();
+    clearVoiceError();
+    setMessages([buildWelcomeMessage(projectLabel, planSetName)]);
+    setQuestion("");
+    setError("");
+    setLoading(false);
+    setVoiceRepliesEnabled(false);
+    setPendingSpokenReply(null);
+  }, [clearVoiceError, planSetId, planSetName, projectId, projectLabel, stopListening, stopSpeaking]);
 
   useEffect(() => {
     if (!voiceRepliesEnabled || !pendingSpokenReply) return;
