@@ -1,0 +1,90 @@
+# Build app image on feature branch, push to GHCR + Docker Hub, optionally deploy via SSH.
+# Branch: feature/preconstruction-plan-annotation only.
+name: Container build and deploy
+
+on:
+  push:
+    branches:
+      - feature/preconstruction-plan-annotation
+
+env:
+  REGISTRY_GHCR: ghcr.io
+  IMAGE_NAME_GHCR: ghcr.io/rupret007/constructiondaily
+  IMAGE_NAME_DH: docker.io
+
+jobs:
+  build-and-push:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta (tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME_GHCR }}
+          tags: |
+            type=raw,value=feature-latest
+            type=sha,prefix=
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_GHCR }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME_GHCR }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME_GHCR }}:feature-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Push to Docker Hub (retag and push)
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin docker.io
+          docker pull ${{ env.IMAGE_NAME_GHCR }}:feature-latest
+          docker tag ${{ env.IMAGE_NAME_GHCR }}:feature-latest ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:feature-latest
+          docker tag ${{ env.IMAGE_NAME_GHCR }}:${{ github.sha }} ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:${{ github.sha }}
+          docker push ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:feature-latest
+          docker push ${{ env.IMAGE_NAME_DH }}/${{ secrets.DOCKERHUB_USERNAME }}/constructiondaily:${{ github.sha }}
+
+  deploy:
+    name: Deploy to server
+    needs: build-and-push
+    if: ${{ secrets.DEPLOY_HOST != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            export DEPLOY_PATH="${{ secrets.DEPLOY_PATH }}"
+            cd "$DEPLOY_PATH"
+            ./infra/podman/deploy.sh
+            echo "Deploy finished."
+            curl -sf http://localhost:8000/api/schema/ || { echo "Post-deploy smoke: curl to /api/schema/ failed."; exit 1; }
+            echo "Post-deploy smoke OK."

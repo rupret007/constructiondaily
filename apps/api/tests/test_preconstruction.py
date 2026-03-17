@@ -2336,6 +2336,204 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(sheet_data["ai_suggestion_outcomes"][0]["decision_state"], "accepted")
         self.assertEqual(sheet_data["ai_suggestion_outcomes"][0]["label"], "Door")
 
+    def test_count_scenario_batch_accept_snapshot_export_includes_counts(self):
+        """Create sheet with mock door suggestions, batch accept by confidence; snapshot and export include takeoff counts and decision states."""
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        for i in range(3):
+            AISuggestion.objects.create(
+                analysis_run=run,
+                project=self.project,
+                plan_sheet=plan_sheet,
+                suggestion_type="rectangle",
+                geometry_json={"type": "rectangle", "x": 0.1 * i, "y": 0.1, "width": 0.1, "height": 0.1},
+                label="Door",
+                rationale="Mock",
+                confidence=0.9,
+            )
+        batch_resp = self.client.post(
+            "/api/preconstruction/suggestions/batch_accept/",
+            {"plan_sheet": str(plan_sheet.id), "min_confidence": 0.85},
+            format="json",
+        )
+        self.assertEqual(batch_resp.status_code, 200)
+        self.assertEqual(batch_resp.json()["accepted_count"], 3)
+        snap_resp = self.client.post(
+            "/api/preconstruction/snapshots/",
+            {"project": str(self.project.id), "plan_set": str(plan_set.id), "name": "v1"},
+            format="json",
+        )
+        self.assertEqual(snap_resp.status_code, 201)
+        payload = snap_resp.json()["snapshot_payload_json"]
+        sheet_data = payload["sheets"][0]
+        # Each accepted Door suggestion creates door + door_hardware takeoff rows (assembly)
+        self.assertEqual(len(sheet_data["takeoff_items"]), 6)
+        self.assertEqual(len(sheet_data["ai_suggestion_outcomes"]), 3)
+        for out in sheet_data["ai_suggestion_outcomes"]:
+            self.assertEqual(out["decision_state"], "accepted")
+        export_resp = self.client.post(
+            "/api/preconstruction/exports/",
+            {"plan_set": str(plan_set.id), "export_type": "json"},
+            format="json",
+        )
+        self.assertEqual(export_resp.status_code, 201)
+        export_payload = export_resp.json()["payload"]
+        self.assertEqual(len(export_payload["sheets"][0]["takeoff_items"]), 6)
+        self.assertEqual(len(export_payload["sheets"][0]["ai_suggestion_outcomes"]), 3)
+
+    def test_shade_area_scenario_annotation_takeoff_snapshot_export(self):
+        """Create polygon/rectangle annotations, takeoff with area unit and calibration; snapshot/export include quantities and geometry."""
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            calibrated_width="100",
+            calibrated_height="80",
+            calibrated_unit=PlanSheet.CalibrationUnit.FEET,
+            created_by=self.user,
+        )
+        layer = AnnotationLayer.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            name="Default",
+            created_by=self.user,
+        )
+        # Polygon (normalized 0.5*0.25) * 100*80 = 1000 sq ft
+        polygon_geom = {
+            "type": "polygon",
+            "points": [
+                {"x": 0, "y": 0},
+                {"x": 0.5, "y": 0},
+                {"x": 0.5, "y": 0.25},
+                {"x": 0, "y": 0.25},
+            ],
+        }
+        ann = AnnotationItem.objects.create(
+            project=self.project,
+            plan_sheet=plan_sheet,
+            layer=layer,
+            annotation_type="polygon",
+            geometry_json=polygon_geom,
+            label="Shade area",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        create_resp = self.client.post(
+            f"/api/preconstruction/annotations/{ann.id}/create_takeoff/",
+            {},
+            format="json",
+        )
+        self.assertEqual(create_resp.status_code, 201)
+        primary = create_resp.json()["primary_takeoff"]
+        self.assertEqual(primary["unit"], "square_feet")
+        self.assertEqual(primary["quantity"], "1000.0000")
+        payload = build_snapshot_payload(plan_set)
+        sheet_data = payload["sheets"][0]
+        self.assertEqual(len(sheet_data["takeoff_items"]), 1)
+        self.assertEqual(sheet_data["takeoff_items"][0]["unit"], "square_feet")
+        self.assertEqual(sheet_data["takeoff_items"][0]["quantity"], "1000.0000")
+        self.assertEqual(len(sheet_data["layers"][0]["items"]), 1)
+        self.assertEqual(sheet_data["layers"][0]["items"][0]["type"], "polygon")
+        self.assertEqual(sheet_data["layers"][0]["items"][0]["geometry_json"], polygon_geom)
+
+    def test_learning_audit_accept_with_edits_reflected_in_snapshot_export(self):
+        """Accept a suggestion with edits (category/unit/quantity); snapshot and export reflect edited values and decision_state/review_state."""
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+        run = AIAnalysisRun.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            plan_sheet=plan_sheet,
+            provider_name="mock",
+            user_prompt="doors",
+            status=AIAnalysisRun.Status.COMPLETED,
+            created_by=self.user,
+        )
+        suggestion = AISuggestion.objects.create(
+            analysis_run=run,
+            project=self.project,
+            plan_sheet=plan_sheet,
+            suggestion_type="rectangle",
+            geometry_json={"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+            label="Door",
+            rationale="Mock",
+            confidence=0.9,
+        )
+        accept_resp = self.client.post(
+            f"/api/preconstruction/suggestions/{suggestion.id}/accept/",
+            {"category": "doors", "unit": "count", "quantity": "2", "label": "Double door"},
+            format="json",
+        )
+        self.assertEqual(accept_resp.status_code, 200)
+        snap_resp = self.client.post(
+            "/api/preconstruction/snapshots/",
+            {"project": str(self.project.id), "plan_set": str(plan_set.id), "name": "v1"},
+            format="json",
+        )
+        self.assertEqual(snap_resp.status_code, 201)
+        payload = snap_resp.json()["snapshot_payload_json"]
+        sheet_data = payload["sheets"][0]
+        self.assertEqual(len(sheet_data["takeoff_items"]), 2)  # door + door_hardware from assembly
+        takeoff_categories = {t["category"] for t in sheet_data["takeoff_items"]}
+        self.assertIn("doors", takeoff_categories)
+        takeoff_doors = next(t for t in sheet_data["takeoff_items"] if t["category"] == "doors")
+        self.assertEqual(takeoff_doors["unit"], "count")
+        self.assertEqual(takeoff_doors["quantity"], "2.0000")
+        self.assertEqual(takeoff_doors["review_state"], "edited")
+        self.assertEqual(len(sheet_data["ai_suggestion_outcomes"]), 1)
+        self.assertEqual(sheet_data["ai_suggestion_outcomes"][0]["decision_state"], "edited")
+        export_resp = self.client.post(
+            "/api/preconstruction/exports/",
+            {"plan_set": str(plan_set.id), "export_type": "json"},
+            format="json",
+        )
+        self.assertEqual(export_resp.status_code, 201)
+        export_payload = export_resp.json()["payload"]
+        exp_sheet = export_payload["sheets"][0]
+        exp_doors = next(t for t in exp_sheet["takeoff_items"] if t["category"] == "doors")
+        self.assertEqual(exp_doors["quantity"], "2.0000")
+        self.assertEqual(exp_doors["review_state"], "edited")
+        self.assertEqual(exp_sheet["ai_suggestion_outcomes"][0]["decision_state"], "edited")
+
     def test_snapshot_lock(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(

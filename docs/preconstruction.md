@@ -122,6 +122,8 @@ Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and D
 - No snapshot diff/compare screen.
 - "PDF metadata" export remains a placeholder, not a generated PDF file.
 
+**Future (roadmap):** Possible next steps include project- or org-level rules (e.g. "door = doors + door_hardware") and exporting accepted/edited suggestions as labeled data for provider calibration or fine-tuning. No implementation commitment yet.
+
 ## AI provider configuration
 
 Set in `apps/api/.env`:
@@ -169,6 +171,16 @@ Base path: `/api/preconstruction/`
 - `suggestions/`: list suggestions + accept/reject + batch_accept
 - `snapshots/`: create/list snapshots + lock
 - `exports/`: create/list export records
+
+## Learning from estimator input
+
+Every accept, edit, and reject is stored. Accept/edit/reject and review states are persisted on `AISuggestion` (`decision_state`, `decided_by`, `decided_at`) and on takeoff items (`review_state`). Snapshot payloads and exports include these outcomes so estimators can review and defend estimates. There is no active model retraining today; the system **adapts** by letting estimators correct suggestions and by using those corrections for reporting, the copilot, and audit. This data is available for future use (e.g. provider calibration or training data).
+
+## Estimator workflows
+
+- **Counting items (e.g. door knobs):** Use AI suggestions plus batch accept by confidence, or draw point/rectangle annotations and create takeoff (single-line or assembly such as door + hardware). Counts and categories appear in takeoff rollups and in CSV/JSON exports.
+- **Shading areas:** Draw polygon or rectangle annotations on the sheet, set sheet calibration (width/height + unit), then create takeoff from the annotation with an area unit. Quantities are computed from geometry and calibration and appear in rollups and exports.
+- **Learning from my input:** Every accept/edit/reject is stored; snapshots and exports capture outcomes for audit and for future calibration or learning pipelines.
 
 ## Data and audit notes
 
