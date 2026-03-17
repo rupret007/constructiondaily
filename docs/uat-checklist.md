@@ -11,6 +11,7 @@
 - Create draft report for selected project/date.
 - Update location and summary.
 - Submit report from field role.
+- Verify submitted report rejects further edits, attachments, and entry changes until rejection.
 - Review and approve report as PM.
 - Lock report as admin.
 - Export approved/locked report to PDF.

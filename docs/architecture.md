@@ -28,3 +28,5 @@
 Rejection transitions:
 
 `submitted|reviewed -> draft`
+
+Draft is the only mutable report state. Once a report is submitted, all report content, related entries, safety items, weather sync, and file changes are frozen until a rejection sends the report back to draft.

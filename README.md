@@ -17,6 +17,7 @@ Internal web application for construction daily job reporting with:
 ## Design Goals
 
 - Daily-report-first workflow: draft, submit, review, approve, lock
+- Draft-only report editing: once submitted, report content stays read-only until a rejection returns it to draft
 - Offline job-site data capture with conflict-aware sync
 - Defensible records through immutable audit events and PDF snapshots
 - Security-by-default: strict authorization, secure sessions, safe uploads
