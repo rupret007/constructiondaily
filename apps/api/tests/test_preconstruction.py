@@ -1555,6 +1555,31 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(run_resp.status_code, 400)
         self.assertIn("Unknown provider", run_resp.json().get("detail", ""))
 
+    @override_settings(PRECONSTRUCTION_ANALYSIS_PROVIDER="")
+    def test_analysis_create_falls_back_to_mock_provider_when_default_is_blank(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+
+        run_resp = self.client.post(
+            "/api/preconstruction/analysis/",
+            {"plan_sheet": str(plan_sheet.id), "user_prompt": "highlight doors"},
+            format="json",
+        )
+
+        self.assertEqual(run_resp.status_code, 201)
+        self.assertEqual(run_resp.json()["provider_name"], "mock")
+
     def test_accept_and_reject_suggestion(self):
         self.client.login(username="estimator1", password="test-pass")
         plan_set = PlanSet.objects.create(

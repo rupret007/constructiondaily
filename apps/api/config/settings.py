@@ -133,6 +133,14 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "Construction Daily Report API",
     "DESCRIPTION": "Internal API for construction daily reporting workflows.",
     "VERSION": "1.0.0",
+    "ENUM_NAME_OVERRIDES": {
+        "PlanSetStatusEnum": "preconstruction.models.PlanSet.Status",
+        "AIAnalysisRunStatusEnum": "preconstruction.models.AIAnalysisRun.Status",
+        "RevisionSnapshotStatusEnum": "preconstruction.models.RevisionSnapshot.Status",
+        "ExportRecordStatusEnum": "preconstruction.models.ExportRecord.Status",
+        "DailyReportStatusEnum": "reports.models.DailyReport.Status",
+        "ReviewStateEnum": "preconstruction.models.AnnotationItem.ReviewState",
+    },
 }
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

@@ -25,6 +25,12 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ("id", "username", "first_name", "last_name", "email")
 
 
+class SessionSerializer(serializers.Serializer):
+    authenticated = serializers.BooleanField()
+    user = UserSerializer(required=False, allow_null=True)
+    csrfToken = serializers.CharField()
+
+
 class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project

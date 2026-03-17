@@ -44,7 +44,7 @@ class PlanSet(TimeStampedModel):
         ordering = ("-created_at",)
 
     def __str__(self) -> str:
-        return f"{self.project.code} — {self.name}"
+        return f"{self.project.code} - {self.name}"
 
 
 class PlanSheet(TimeStampedModel):
@@ -94,7 +94,7 @@ class PlanSheet(TimeStampedModel):
         ordering = ("sheet_index", "created_at")
 
     def __str__(self) -> str:
-        return f"{self.plan_set.name} — {self.title or self.sheet_number or str(self.id)[:8]}"
+        return f"{self.plan_set.name} - {self.title or self.sheet_number or str(self.id)[:8]}"
 
 class ProjectDocument(TimeStampedModel):
     """Project-scoped document used for grounded estimator retrieval."""
@@ -152,7 +152,7 @@ class ProjectDocument(TimeStampedModel):
         ordering = ("-created_at",)
 
     def __str__(self) -> str:
-        return f"{self.project.code} â€” {self.title}"
+        return f"{self.project.code} - {self.title}"
 
 
 class ProjectDocumentChunk(TimeStampedModel):
@@ -273,7 +273,7 @@ class AnnotationItem(TimeStampedModel):
         ordering = ("created_at",)
 
     def __str__(self) -> str:
-        return f"{self.annotation_type} — {self.label or self.id}"
+        return f"{self.annotation_type} - {self.label or self.id}"
 
 
 class TakeoffItem(TimeStampedModel):
@@ -359,7 +359,7 @@ class TakeoffItem(TimeStampedModel):
         ordering = ("category", "created_at")
 
     def __str__(self) -> str:
-        return f"{self.category} — {self.quantity} {self.unit}"
+        return f"{self.category} - {self.quantity} {self.unit}"
 
 
 class AIAnalysisRun(TimeStampedModel):
@@ -479,7 +479,7 @@ class RevisionSnapshot(TimeStampedModel):
         ordering = ("-created_at",)
 
     def __str__(self) -> str:
-        return f"{self.plan_set.name} — {self.name} ({self.status})"
+        return f"{self.plan_set.name} - {self.name} ({self.status})"
 
 
 class ExportRecord(TimeStampedModel):
@@ -520,4 +520,4 @@ class ExportRecord(TimeStampedModel):
         ordering = ("-created_at",)
 
     def __str__(self) -> str:
-        return f"{self.plan_set.name} — {self.export_type} ({self.status})"
+        return f"{self.plan_set.name} - {self.export_type} ({self.status})"

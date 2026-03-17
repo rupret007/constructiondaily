@@ -662,7 +662,7 @@ class AIAnalysisRunViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         plan_sheet_id = request.data.get("plan_sheet")
         user_prompt = request.data.get("user_prompt", "")
-        provider_name = request.data.get("provider_name") or settings.PRECONSTRUCTION_ANALYSIS_PROVIDER
+        provider_name = request.data.get("provider_name") or settings.PRECONSTRUCTION_ANALYSIS_PROVIDER or "mock"
         if not plan_sheet_id:
             return Response(
                 {"detail": "plan_sheet is required."},

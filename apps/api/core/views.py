@@ -15,13 +15,14 @@ from core.serializers import (
     LoginSerializer,
     ProjectMembershipSerializer,
     ProjectSerializer,
+    SessionSerializer,
     UserSerializer,
 )
 
 
+@extend_schema(request=LoginSerializer, responses={200: UserSerializer})
 @api_view(["POST"])
 @permission_classes([])
-@extend_schema(exclude=True)
 def login_view(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -31,17 +32,17 @@ def login_view(request):
     return Response(UserSerializer(user).data)
 
 
+@extend_schema(request=None, responses={204: None})
 @api_view(["POST"])
 @permission_classes([])
-@extend_schema(exclude=True)
 def logout_view(request):
     logout(request)
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+@extend_schema(responses={200: SessionSerializer})
 @api_view(["GET"])
 @permission_classes([])
-@extend_schema(exclude=True)
 def session_view(request):
     csrf_token = get_token(request)
     if not request.user.is_authenticated:
