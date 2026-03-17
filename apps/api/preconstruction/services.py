@@ -9,6 +9,7 @@ import math
 import re
 from collections import defaultdict
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
+from functools import lru_cache
 from typing import Any
 
 from django.conf import settings
@@ -413,7 +414,15 @@ def _normalize_estimator_quantity(quantity: Decimal, unit: str) -> Decimal:
 
 
 def _contains_any(text: str, keywords: tuple[str, ...] | list[str]) -> bool:
-    return any(keyword in text for keyword in keywords)
+    return any(_keyword_pattern(keyword).search(text) for keyword in keywords if keyword)
+
+
+@lru_cache(maxsize=256)
+def _keyword_pattern(keyword: str) -> re.Pattern[str]:
+    escaped = re.escape(keyword.strip()).replace(r"\ ", r"\s+")
+    prefix = r"\b" if keyword and keyword[0].isalnum() else ""
+    suffix = r"\b" if keyword and keyword[-1].isalnum() else ""
+    return re.compile(f"{prefix}{escaped}{suffix}", re.IGNORECASE)
 
 
 def _choice_label(choice_enum, value: str | None) -> str:
@@ -2110,10 +2119,10 @@ def answer_preconstruction_question(
         return _answer_analysis_question(project, scoped_runs, scoped_suggestions, plan_set, plan_sheet)
     if _detect_requested_categories(question_lower):
         return _answer_takeoff_question(project, scoped_takeoffs, plan_set, plan_sheet, question_lower)
-    if _contains_any(question_lower, COPILOT_SHEET_KEYWORDS):
-        return _answer_sheet_question(project, scoped_sheets, plan_set, plan_sheet, question_lower)
     if _contains_any(question_lower, COPILOT_PLAN_SET_KEYWORDS):
         return _answer_plan_set_question(project, scoped_plan_sets, plan_set, plan_sheet)
+    if _contains_any(question_lower, COPILOT_SHEET_KEYWORDS):
+        return _answer_sheet_question(project, scoped_sheets, plan_set, plan_sheet, question_lower)
     return _answer_general_summary(
         project,
         scoped_plan_sets,
@@ -2151,17 +2160,18 @@ def run_plan_analysis(
             provider = get_provider(selected_provider)
             suggestions_data = provider.run_analysis(plan_sheet, user_prompt)
             response_payload = {"suggestions": suggestions_data}
-            for s in suggestions_data:
-                AISuggestion.objects.create(
-                    analysis_run=run,
-                    project=plan_sheet.project,
-                    plan_sheet=plan_sheet,
-                    suggestion_type=s.get("suggestion_type", "rectangle"),
-                    geometry_json=s.get("geometry_json", {}),
-                    label=s.get("label", ""),
-                    rationale=s.get("rationale", ""),
-                    confidence=s.get("confidence"),
-                )
+            with transaction.atomic():
+                for s in suggestions_data:
+                    AISuggestion.objects.create(
+                        analysis_run=run,
+                        project=plan_sheet.project,
+                        plan_sheet=plan_sheet,
+                        suggestion_type=s.get("suggestion_type", "rectangle"),
+                        geometry_json=s.get("geometry_json", {}),
+                        label=s.get("label", ""),
+                        rationale=s.get("rationale", ""),
+                        confidence=s.get("confidence"),
+                    )
             run.response_payload_json = response_payload
             run.status = AIAnalysisRun.Status.COMPLETED
         except Exception as e:

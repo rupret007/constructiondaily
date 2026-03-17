@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -389,7 +390,7 @@ def _document_type_bonus(document: ProjectDocument, question_lower: str) -> int:
     return 8 if any(keyword in question_lower for keyword in keywords) else 0
 
 
-def _extract_page_text_with_optional_ocr(page, fitz_module, *, ocr_command: str | None) -> str:
+def _extract_page_text_with_optional_ocr(page, fitz_module, *, ocr_command: list[str] | None) -> str:
     extracted_text = _normalize_whitespace(page.get_text("text"))
     if not _should_attempt_pdf_page_ocr(extracted_text):
         return extracted_text
@@ -414,7 +415,7 @@ def _should_attempt_pdf_page_ocr(extracted_text: str) -> bool:
     return len(extracted_text.strip()) < settings.PRECONSTRUCTION_DOCUMENT_OCR_MIN_TEXT_CHARS
 
 
-def _resolve_ocr_command() -> str | None:
+def _resolve_ocr_command() -> list[str] | None:
     if not settings.PRECONSTRUCTION_DOCUMENT_OCR_ENABLED:
         return None
     configured = settings.PRECONSTRUCTION_DOCUMENT_OCR_COMMAND.strip()
@@ -422,13 +423,17 @@ def _resolve_ocr_command() -> str | None:
         return None
     resolved = shutil.which(configured)
     if resolved:
-        return resolved
-    if shutil.which(configured.split()[0]):
-        return configured
+        return [resolved]
+    command_parts = shlex.split(configured, posix=False)
+    if not command_parts:
+        return None
+    resolved_executable = shutil.which(command_parts[0])
+    if resolved_executable:
+        return [resolved_executable, *command_parts[1:]]
     return None
 
 
-def _run_pdf_page_ocr(page, fitz_module, ocr_command: str | None) -> str:
+def _run_pdf_page_ocr(page, fitz_module, ocr_command: list[str] | None) -> str:
     if not ocr_command:
         return ""
     scale = max(settings.PRECONSTRUCTION_DOCUMENT_OCR_SCALE, 1)
@@ -436,7 +441,7 @@ def _run_pdf_page_ocr(page, fitz_module, ocr_command: str | None) -> str:
     pixmap = page.get_pixmap(matrix=matrix, alpha=False)
     with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as image_file:
         pixmap.save(image_file.name)
-        command = [ocr_command, image_file.name, "stdout", "--psm", "6"]
+        command = [*ocr_command, image_file.name, "stdout", "--psm", "6"]
         try:
             completed = subprocess.run(
                 command,

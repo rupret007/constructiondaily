@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 from datetime import timedelta
+from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
@@ -14,6 +15,7 @@ from rest_framework.test import APIClient
 
 from audit.models import AuditEvent
 from core.models import Project, ProjectMembership
+from preconstruction import document_services
 from preconstruction.models import (
     AIAnalysisRun,
     AISuggestion,
@@ -1477,6 +1479,46 @@ class PreconstructionAPITests(TestCase):
             self.assertEqual(sugg1[0].geometry_json, sugg2[0].geometry_json)
             self.assertEqual(sugg1[0].label, sugg2[0].label)
 
+    @patch("preconstruction.services.get_provider")
+    def test_ai_analysis_rolls_back_partial_suggestions_on_failure(self, mock_get_provider):
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Set",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        plan_sheet = PlanSheet.objects.create(
+            project=self.project,
+            plan_set=plan_set,
+            storage_key="plans/test/sheet.pdf",
+            created_by=self.user,
+        )
+
+        class BrokenProvider:
+            def run_analysis(self, _plan_sheet, _prompt):
+                return [
+                    {
+                        "suggestion_type": "rectangle",
+                        "geometry_json": {"type": "rectangle", "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.1},
+                        "label": "Door A1",
+                        "confidence": "0.95",
+                    },
+                    {
+                        "suggestion_type": "rectangle",
+                        "geometry_json": {"type": "rectangle", "x": 0.2, "y": 0.2, "width": 0.1, "height": 0.1},
+                        "label": "Broken suggestion",
+                        "confidence": "not-a-number",
+                    },
+                ]
+
+        mock_get_provider.return_value = BrokenProvider()
+
+        run = run_plan_analysis(plan_sheet, "find doors", self.user)
+
+        self.assertEqual(run.status, AIAnalysisRun.Status.FAILED)
+        self.assertEqual(AISuggestion.objects.filter(analysis_run=run).count(), 0)
+        self.assertIn("not-a-number", str(run.response_payload_json.get("error", "")))
+
     def test_provider_registry(self):
         provider = get_provider("mock")
         self.assertIsNotNone(provider)
@@ -2678,7 +2720,7 @@ class PreconstructionAPITests(TestCase):
         PRECONSTRUCTION_DOCUMENT_OCR_ENABLED=True,
         PRECONSTRUCTION_DOCUMENT_OCR_MIN_TEXT_CHARS=24,
     )
-    @patch("preconstruction.document_services._resolve_ocr_command", return_value="tesseract")
+    @patch("preconstruction.document_services._resolve_ocr_command", return_value=["tesseract"])
     @patch("preconstruction.document_services._run_pdf_page_ocr", return_value="Rated openings require hardware set BH-OCR.")
     def test_project_document_upload_uses_ocr_for_scanned_pdf(self, _run_pdf_page_ocr, _resolve_ocr_command):
         self.client.login(username="estimator1", password="test-pass")
@@ -2702,6 +2744,35 @@ class PreconstructionAPITests(TestCase):
         document = ProjectDocument.objects.get(id=payload["id"])
         self.assertIn("BH-OCR", document.extracted_text)
         self.assertTrue(_run_pdf_page_ocr.called)
+
+    @override_settings(
+        PRECONSTRUCTION_DOCUMENT_OCR_ENABLED=True,
+        PRECONSTRUCTION_DOCUMENT_OCR_COMMAND="tesseract --oem 1",
+        PRECONSTRUCTION_DOCUMENT_OCR_SCALE=2,
+        PRECONSTRUCTION_DOCUMENT_OCR_TIMEOUT_SECONDS=5,
+    )
+    @patch("preconstruction.document_services.subprocess.run")
+    @patch("preconstruction.document_services.shutil.which")
+    def test_project_document_ocr_command_supports_extra_flags(self, mock_which, mock_run):
+        mock_which.side_effect = lambda value: "C:/Tools/tesseract.exe" if value == "tesseract" else None
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="OCR text")
+
+        resolved = document_services._resolve_ocr_command()
+
+        self.assertEqual(resolved, ["C:/Tools/tesseract.exe", "--oem", "1"])
+
+        page = SimpleNamespace(
+            get_pixmap=lambda matrix, alpha=False: SimpleNamespace(save=lambda path: None)
+        )
+        fitz_module = SimpleNamespace(Matrix=lambda x, y: (x, y))
+
+        text = document_services._run_pdf_page_ocr(page, fitz_module, resolved)
+
+        self.assertEqual(text, "OCR text")
+        command = mock_run.call_args.args[0]
+        self.assertEqual(command[:3], ["C:/Tools/tesseract.exe", "--oem", "1"])
+        self.assertTrue(command[3].endswith(".png"))
+        self.assertEqual(command[-3:], ["stdout", "--psm", "6"])
 
     def test_project_document_upload_promotes_safe_file_and_serves_download(self):
         self.client.login(username="estimator1", password="test-pass")
@@ -3109,6 +3180,31 @@ class PreconstructionAPITests(TestCase):
         self.assertEqual(payload["status"], "grounded")
         self.assertIn("pending", payload["answer"].lower())
         self.assertTrue(any(citation["kind"] == "takeoff_summary" for citation in payload["citations"]))
+
+    def test_preconstruction_copilot_does_not_false_match_outdoor_as_doors(self):
+        self.client.login(username="estimator1", password="test-pass")
+        plan_set = PlanSet.objects.create(
+            project=self.project,
+            name="Exterior Scope",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        resp = self.client.post(
+            "/api/preconstruction/copilot/query/",
+            {
+                "project": str(self.project.id),
+                "plan_set": str(plan_set.id),
+                "question": "Do we have outdoor staging concerns on this plan set?",
+            },
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "grounded")
+        self.assertIn("is currently draft", payload["answer"].lower())
+        self.assertNotIn("door", payload["answer"].lower())
 
     def test_preconstruction_requires_auth(self):
         plan_set = PlanSet.objects.create(
