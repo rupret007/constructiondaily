@@ -1,0 +1,15 @@
+[Unit]
+Description=Construction Daily app container poll-update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Set to your deploy directory (repo root on server). Script uses DEPLOY_PATH for compose and .env.
+Environment=DEPLOY_PATH=/opt/constructiondaily
+ExecStart=/opt/constructiondaily/infra/podman/poll-update.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

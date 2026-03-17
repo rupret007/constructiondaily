@@ -8,6 +8,19 @@ from pathlib import Path
 from django.conf import settings
 
 
+def _resolve_storage_path(storage_key: str) -> Path:
+    """Resolve storage_key under MEDIA_ROOT; raise ValueError if it escapes (e.g. '..')."""
+    if not storage_key or ".." in storage_key:
+        raise ValueError("Invalid storage_key.")
+    base = Path(settings.MEDIA_ROOT).resolve()
+    path = (base / storage_key).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        raise ValueError("storage_key resolves outside MEDIA_ROOT.")
+    return path
+
+
 def _plans_dir() -> Path:
     root = Path(settings.MEDIA_ROOT) / "plans"
     root.mkdir(parents=True, exist_ok=True)
@@ -46,7 +59,7 @@ def store_plan_file(uploaded_file, project_id: str, plan_set_id: str, extension:
 
 def get_plan_file_path(storage_key: str) -> Path:
     """Return full filesystem path for a storage_key."""
-    return Path(settings.MEDIA_ROOT) / storage_key
+    return _resolve_storage_path(storage_key)
 
 
 def store_project_document_file(
@@ -70,7 +83,10 @@ def store_project_document_file(
 
 
 def _move_project_document_file(storage_key: str, project_id: str, plan_set_id: str | None, stage: str) -> str:
-    source = Path(settings.MEDIA_ROOT) / storage_key
+    try:
+        source = _resolve_storage_path(storage_key)
+    except ValueError:
+        return storage_key
     if not source.exists():
         return storage_key
     target_folder = _project_document_scope_dir(project_id, plan_set_id, stage=stage)
@@ -89,10 +105,13 @@ def quarantine_project_document_file(storage_key: str, project_id: str, plan_set
 
 
 def get_project_document_file_path(storage_key: str) -> Path:
-    return Path(settings.MEDIA_ROOT) / storage_key
+    return _resolve_storage_path(storage_key)
 
 
 def delete_project_document_file(storage_key: str) -> None:
-    path = get_project_document_file_path(storage_key)
+    try:
+        path = _resolve_storage_path(storage_key)
+    except ValueError:
+        return
     if path.exists():
         path.unlink()

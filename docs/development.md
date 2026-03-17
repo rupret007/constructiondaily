@@ -2,8 +2,11 @@
 
 ## Local startup
 
-- Preferred on Windows: run `start-dev.bat` from repo root.
-- Stop servers with `stop-dev.bat`.
+Run the API and Web in two terminals, or use the Podman stack.
+
+- **API:** From `apps/api`: `python manage.py migrate && python manage.py runserver` (port 8000).
+- **Web:** From `apps/web`: `npm install && npm run dev` (port 5173). Open http://127.0.0.1:5173 when ready.
+- **Containers:** For a full stack (app + Postgres), see [Deployment with Podman](deployment-podman.md).
 
 ## Preconstruction access
 

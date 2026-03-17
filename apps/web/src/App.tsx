@@ -96,6 +96,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const onUnauthorized = () => resetAppState();
+    window.addEventListener("offline-queue-unauthorized", onUnauthorized);
+    return () => window.removeEventListener("offline-queue-unauthorized", onUnauthorized);
+  }, []);
+
+  useEffect(() => {
     if (!selectedProjectId) return;
     void loadReports(selectedProjectId).catch((err) => {
       setError(getErrorMessage(err, "Failed to load reports."));

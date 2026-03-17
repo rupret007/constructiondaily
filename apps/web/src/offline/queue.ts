@@ -2,7 +2,7 @@ import { addMutation, getMutations, removeMutation } from "./db";
 import { ApiRequestError, apiRequest } from "../services/api";
 import type { OfflineMutation } from "../types/api";
 
-const NON_RETRYABLE_4XX = new Set([400, 404, 405, 409, 410, 411, 412, 413, 414, 415, 422]);
+const NON_RETRYABLE_4XX = new Set([400, 401, 404, 405, 409, 410, 411, 412, 413, 414, 415, 422]);
 
 export async function enqueueMutation(mutation: Omit<OfflineMutation, "id" | "createdAt">) {
   const queued: OfflineMutation = {
@@ -31,6 +31,10 @@ export async function flushMutationQueue(): Promise<number> {
         // Drop invalid client-side mutations so one bad payload doesn't block the queue forever.
         await removeMutation(mutation.id);
         window.dispatchEvent(new CustomEvent("offline-queue-changed"));
+        if (error.status === 401) {
+          // Session expired; notify app so it can show login (e.g. resetAppState).
+          window.dispatchEvent(new CustomEvent("offline-queue-unauthorized"));
+        }
         continue;
       }
       // Stop processing to preserve ordering and retry later.

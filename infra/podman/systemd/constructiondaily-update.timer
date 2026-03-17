@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly timer for Construction Daily app image poll-update
+After=network-online.target
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

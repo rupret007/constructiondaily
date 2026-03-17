@@ -55,6 +55,10 @@ gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2
 
 For production, use a process manager (systemd, supervisord) and a reverse proxy (Nginx, Caddy) in front for HTTPS and static/media optimization.
 
+## Django admin
+
+The Django admin is available at `/admin/`. Access is controlled by the `is_staff` flag. **Only superusers should have `is_staff`** if you use the admin for operational support. Admin is not project-scoped: staff users can see and edit all projects, reports, and other data. Do not grant `is_staff` to project-level "Admin" roles unless you intend to give them site-wide admin access.
+
 ## Deploy Check
 
 Run `python manage.py check --deploy` before deploying. It reports security and configuration issues. Address warnings before going live.
@@ -67,3 +71,7 @@ Run `python manage.py check --deploy` before deploying. It reports security and 
 ## Docker (infra)
 
 See `infra/docker-compose.yml` for a PostgreSQL service. Extend it with a Django/Gunicorn service for full containerized deployment.
+
+## Podman (container stack + auto-deploy)
+
+For a full app + Postgres stack with one-command run, optional immediate deploy on push, and hourly server-side image updates, see **[Deployment with Podman](deployment-podman.md)**.
