@@ -77,4 +77,4 @@ From the repo root, run **`build.bat`** to build the frontend, collect static fi
 
 - Repository CI now lives in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and runs backend tests, frontend tests/build, and browser smoke tests on pushes and pull requests.
 - Deterministic browser smoke-test data can be seeded from `apps/api` with `python manage.py seed_e2e_data`.
-- The first browser regression covers sign-in, navigation into **Preconstruction**, and plan-set creation using Playwright.
+- Browser regressions now cover sign-in, navigation into **Preconstruction**, plan-set creation, and the full daily report lifecycle with role handoffs and stale-revision conflict handling using Playwright.

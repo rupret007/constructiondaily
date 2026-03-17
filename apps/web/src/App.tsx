@@ -41,14 +41,22 @@ export default function App() {
   const [preconstructionPlanSetId, setPreconstructionPlanSetId] = useState<string | null>(null);
   const { isOnline, lastFlushedCount, lastFlushId, queuedCount } = useOfflineSync();
 
+  function resetAppState() {
+    setUser(null);
+    setProjects([]);
+    setReports([]);
+    setSelectedProjectId("");
+    setSelectedReport(null);
+    setArea("reports");
+    setPreconstructionSheetId(null);
+    setPreconstructionPlanSetId(null);
+    setError("");
+  }
+
   async function loadSessionAndProjects() {
     const session = await getSession();
     if (!session.authenticated || !session.user) {
-      setUser(null);
-      setProjects([]);
-      setReports([]);
-      setSelectedProjectId("");
-      setSelectedReport(null);
+      resetAppState();
       return;
     }
     setUser(session.user);
@@ -140,16 +148,9 @@ export default function App() {
           }
         }}
         onLogout={() => {
-          void logout().finally(() => {
-            setUser(null);
-            setProjects([]);
-            setReports([]);
-            setSelectedProjectId("");
-            setSelectedReport(null);
-            setArea("reports");
-            setPreconstructionSheetId(null);
-            setPreconstructionPlanSetId(null);
-            setError("");
+          resetAppState();
+          void logout().catch(() => {
+            // Keep the client signed out locally even if the server request fails.
           });
         }}
       />
