@@ -2,6 +2,8 @@
 
 Preconstruction supports plan-set management, plan sheet upload (PDF, DXF, and DWG), project document ingestion (PDF, TXT, MD), on-sheet annotation, takeoff tracking, plan-set estimating dashboards, AI suggestion review (configurable provider), grounded copilot workflows with browser voice support, revision snapshots, and exports.
 
+**Quick path for estimators:** Pick project → Create plan set → Upload plans → Open a sheet → Takeoff / AI suggestions → Snapshot → Export. The rest of this doc fills in details and options.
+
 ## Access and roles
 
 - Authentication is required.

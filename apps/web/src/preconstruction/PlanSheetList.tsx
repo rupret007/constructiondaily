@@ -74,7 +74,7 @@ export function PlanSheetList({
         <p className="text-sm text-muted-foreground">Loading sheets...</p>
       ) : sheets.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No sheets yet. Upload a PDF, DXF, or DWG plan to get started.
+          Add plan sheets (PDF, DXF, DWG) to start.
         </p>
       ) : (
         <div className="flex flex-col gap-2">

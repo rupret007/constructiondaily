@@ -2,6 +2,27 @@ import { Suspense, lazy, useEffect, useState } from "react";
 import { Alert } from "./components/ui/alert";
 import { LoginForm } from "./components/LoginForm";
 import { NavBar, type AppArea } from "./components/NavBar";
+
+const THEME_STORAGE_KEY = "theme";
+type Theme = "light" | "dark";
+
+function getInitialTheme(): Theme {
+  if (typeof window === "undefined") return "dark";
+  const stored = localStorage.getItem(THEME_STORAGE_KEY) as Theme | null;
+  if (stored === "light" || stored === "dark") return stored;
+  return "dark";
+}
+
+function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+  if (theme === "dark") {
+    root.classList.add("dark");
+  } else {
+    root.classList.remove("dark");
+  }
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", theme === "dark" ? "#0f172a" : "#1e3a5f");
+}
 import { OfflineBadge } from "./components/OfflineBadge";
 import { ReportDetail } from "./components/ReportDetail";
 import { ReportList } from "./components/ReportList";
@@ -35,6 +56,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 export default function App() {
+  const [theme, setThemeState] = useState<Theme>(getInitialTheme);
   const [user, setUser] = useState<ApiUser | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -45,6 +67,15 @@ export default function App() {
   const [preconstructionSheetId, setPreconstructionSheetId] = useState<string | null>(null);
   const [preconstructionPlanSetId, setPreconstructionPlanSetId] = useState<string | null>(null);
   const { isOnline, lastFlushedCount, lastFlushId, queuedCount } = useOfflineSync();
+
+  useEffect(() => {
+    applyTheme(theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  function setTheme(next: Theme) {
+    setThemeState(next);
+  }
 
   function resetAppState() {
     setUser(null);
@@ -143,7 +174,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <main className="mx-auto max-w-6xl px-4 py-6">
+      <main className="min-h-screen bg-background px-4 py-6">
         <LoginForm
           onSubmit={async (username, password) => {
             await login(username, password);
@@ -155,7 +186,8 @@ export default function App() {
   }
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-6">
+    <main className="min-h-screen bg-background px-4 py-6">
+      <div className="mx-auto max-w-6xl">
       <NavBar
         user={user}
         area={area}
@@ -172,6 +204,8 @@ export default function App() {
             // Keep the client signed out locally even if the server request fails.
           });
         }}
+        theme={theme}
+        onThemeChange={setTheme}
       />
       <OfflineBadge isOnline={isOnline} lastFlushedCount={lastFlushedCount} queuedCount={queuedCount} />
       {error && (
@@ -314,6 +348,7 @@ export default function App() {
         />
         </div>
       )}
+      </div>
     </main>
   );
 }

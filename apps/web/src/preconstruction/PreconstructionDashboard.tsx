@@ -14,6 +14,7 @@ import { PreconstructionCopilotPanel } from "./PreconstructionCopilotPanel";
 import { ProjectDocumentPanel } from "./ProjectDocumentPanel";
 import { PlanSetList } from "./PlanSetList";
 import { PlanSheetList } from "./PlanSheetList";
+import { EstimatorProgress, type EstimatorProgressStep } from "./EstimatorProgress";
 
 type Props = {
   projectId: string;
@@ -171,6 +172,38 @@ export function PreconstructionDashboard({
     onProjectChange(nextProjectId);
   };
 
+  const step1Done = Boolean(projectId);
+  const step2Done = planSets.length > 0;
+  const step3Done = Boolean(selectedPlanSetId && sheets.length > 0);
+  const stepsBase: EstimatorProgressStep[] = [
+    { step: 1, label: "Project selected", done: step1Done },
+    { step: 2, label: "Plan set created", done: step2Done },
+    { step: 3, label: "Plan sheets uploaded", done: step3Done },
+    { step: 4, label: "Open a sheet", done: false },
+    { step: 5, label: "Create takeoff / annotations", done: false },
+    { step: 6, label: "Run AI suggestions / accept", done: false },
+    { step: 7, label: "Create a snapshot", done: false },
+    { step: 8, label: "Export JSON/CSV", done: false },
+  ];
+  const firstIncompleteIdx = stepsBase.findIndex((s) => !s.done);
+  const steps = stepsBase.map((s, idx) => ({ ...s, current: idx === firstIncompleteIdx }));
+
+  const nextAction =
+    !step1Done || !step2Done
+      ? {
+          label: "Create plan set",
+          onClick: () => setShowCreateForm(true),
+          disabled: !step1Done,
+        }
+      : step2Done && !step3Done
+      ? undefined
+      : selectedPlanSetId && sheets.length > 0
+      ? {
+          label: "Open a sheet",
+          onClick: () => onOpenSheet(sheets[0].id, selectedPlanSetId),
+        }
+      : undefined;
+
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,40%)_1fr]">
       <Card className="min-w-0">
@@ -231,6 +264,10 @@ export function PreconstructionDashboard({
               )}
               {loading && planSets.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Loading...</p>
+              ) : planSets.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  No plan sets yet. Create one to upload plans and start takeoff.
+                </p>
               ) : (
                 <PlanSetList
                   planSets={planSets}
@@ -243,6 +280,15 @@ export function PreconstructionDashboard({
         </CardContent>
       </Card>
       <div className="space-y-6">
+        <Card>
+          <CardContent className="pt-4">
+            <EstimatorProgress
+              title="Estimator checklist"
+              steps={steps}
+              nextAction={nextAction}
+            />
+          </CardContent>
+        </Card>
         <Card className="min-w-0">
           <CardHeader>
             <CardTitle>{selectedPlanSet?.name ?? "Plan set"}</CardTitle>

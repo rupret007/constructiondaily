@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import { SheetCopilotPanel } from "./SheetCopilotPanel";
+import { EstimatorProgress } from "./EstimatorProgress";
 import {
   acceptSuggestion,
   batchAcceptSuggestions,
@@ -1244,6 +1245,35 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   };
   const selectedAnnotation = annotations.find((item) => item.id === selectedAnnotationId) ?? null;
 
+  const step1Done = Boolean(sheet);
+  const step2Done = Boolean(planSetId);
+  const step3Done = Boolean(sheet);
+  const step4Done = Boolean(sheet);
+  const step5Done = annotations.length > 0 || takeoffItems.length > 0;
+  const step6Done = suggestions.length > 0;
+  const step7Done = snapshots.length > 0;
+  const step8Done = exports.length > 0;
+
+  const estimatorStepsBase = [
+    { step: 1, label: "Project selected", done: step1Done },
+    { step: 2, label: "Plan set created", done: step2Done },
+    { step: 3, label: "Plan sheets uploaded", done: step3Done },
+    { step: 4, label: "Open this sheet", done: step4Done },
+    { step: 5, label: "Create takeoff / annotations", done: step5Done },
+    { step: 6, label: "Run AI suggestions / accept", done: step6Done },
+    { step: 7, label: "Create a snapshot", done: step7Done },
+    { step: 8, label: "Export JSON/CSV", done: step8Done },
+  ];
+
+  const estimatorFirstIncompleteIdx = estimatorStepsBase.findIndex((s) => !s.done);
+  const estimatorSteps = estimatorStepsBase.map((s, idx) => ({ ...s, current: idx === estimatorFirstIncompleteIdx }));
+
+  const estimatorNextAction = !step7Done
+    ? { label: "Create snapshot", onClick: () => void handleCreateSnapshot(), disabled: creating }
+    : !step8Done
+    ? { label: "Export JSON", onClick: () => void handleExport("json"), disabled: creating }
+    : undefined;
+
   const drawCadReference = useCallback((ctx: CanvasRenderingContext2D, pw: number, ph: number) => {
     cadPreviewItems.forEach((item) => {
       drawAnnotation(
@@ -1989,6 +2019,10 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
           />
         </div>
       ) : null}
+
+      <div className="card" style={{ marginBottom: "1rem", padding: "1rem" }}>
+        <EstimatorProgress title="Estimator checklist" steps={estimatorSteps} nextAction={estimatorNextAction} />
+      </div>
 
       <hr style={{ margin: "1.5rem 0" }} />
       <h4>AI suggestion review</h4>

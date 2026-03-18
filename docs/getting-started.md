@@ -66,4 +66,18 @@ Then sign in with what you chose. To use **Preconstruction**, add your user to a
 - **Daily Reports** – Create and submit daily reports for a project; view and approve as superintendent or project manager.
 - **Preconstruction** – Create a plan set, upload plan sheets (PDF/DXF/DWG), run analysis, accept or edit suggestions, use the copilot, create snapshots, and export takeoff data. See [Preconstruction](preconstruction.md) for workflows and concepts.
 
+### Estimator path (Preconstruction)
+
+A typical path from zero to export:
+
+1. **Pick project** – In Preconstruction, select the project you’re bidding.
+2. **Create plan set** – Add a plan set for this bid (e.g. “Floor 1” or “Site plan”).
+3. **Upload plans** – Add plan sheets (PDF, DXF, or DWG) to the plan set.
+4. **Open a sheet** – Click a sheet to open the viewer and see the plan.
+5. **Takeoff / AI suggestions** – Create takeoff manually from annotations, or run AI analysis and accept/edit suggestions. Use the sheet copilot for voice or typed commands.
+6. **Snapshot** – Create a snapshot (and lock when final) to freeze a revision for audit.
+7. **Export** – Export takeoff as JSON or CSV (or PDF summary) for your estimate.
+
+For details, examples, and roles, see [Preconstruction](preconstruction.md).
+
 To stop the app: `podman compose -f infra/podman-compose.yml down` (from repo root).

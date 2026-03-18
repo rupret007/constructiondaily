@@ -13,6 +13,8 @@ describe("NavBar", () => {
         area="reports"
         onAreaChange={() => {}}
         onLogout={() => {}}
+        theme="dark"
+        onThemeChange={() => {}}
       />
     );
     expect(screen.getByText("Construction Daily Report")).toBeInTheDocument();
@@ -27,6 +29,8 @@ describe("NavBar", () => {
         area="reports"
         onAreaChange={() => {}}
         onLogout={() => {}}
+        theme="dark"
+        onThemeChange={() => {}}
       />
     );
     expect(screen.getByText("Test")).toBeInTheDocument();
@@ -40,6 +44,8 @@ describe("NavBar", () => {
         area="reports"
         onAreaChange={onAreaChange}
         onLogout={() => {}}
+        theme="dark"
+        onThemeChange={() => {}}
       />
     );
     await userEvent.click(screen.getByRole("button", { name: /preconstruction/i }));
@@ -54,6 +60,8 @@ describe("NavBar", () => {
         area="reports"
         onAreaChange={() => {}}
         onLogout={onLogout}
+        theme="dark"
+        onThemeChange={() => {}}
       />
     );
     await userEvent.click(screen.getByRole("button", { name: /logout/i }));
