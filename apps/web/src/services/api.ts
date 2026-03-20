@@ -76,6 +76,10 @@ export async function apiRequest<T>(endpoint: string, init: RequestInit = {}): P
     credentials: "include"
   });
 
+  if (response.status === 401) {
+    window.dispatchEvent(new CustomEvent("session:expired"));
+  }
+
   if (!response.ok) {
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {

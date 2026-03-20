@@ -49,6 +49,12 @@ function buildWelcomeMessage(sheetLabel: string): CopilotMessage {
   };
 }
 
+const PROVIDER_COLORS: Record<AnalysisProvider, string> = {
+  mock: "#ca8a04", // yellow-600
+  openai_vision: "#2563eb", // blue-600
+  cad_dxf: "#9333ea", // purple-600
+};
+
 export function SheetCopilotPanel({
   projectId,
   planSetId,
@@ -228,7 +234,22 @@ export function SheetCopilotPanel({
 
   return (
     <div className="card" style={{ flex: "1" }}>
-      <h4>Sheet copilot</h4>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+        <h4 style={{ margin: 0 }}>Sheet copilot</h4>
+        <span
+          style={{
+            fontSize: "0.7rem",
+            fontWeight: "bold",
+            padding: "0.1rem 0.4rem",
+            borderRadius: "0.2rem",
+            textTransform: "uppercase",
+            color: "white",
+            background: PROVIDER_COLORS[analysisProvider],
+          }}
+        >
+          {analysisProvider.replace("_", " ")}
+        </span>
+      </div>
       <p className="empty-hint">
         Scoped to {sheetLabel}. {selectedAnnotationId ? `Selected annotation: ${selectedAnnotationLabel || "current annotation"}.` : "Select an annotation to let me create a takeoff package."}
       </p>

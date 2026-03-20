@@ -138,7 +138,11 @@ export default function App() {
   useEffect(() => {
     const onUnauthorized = () => resetAppState();
     window.addEventListener("offline-queue-unauthorized", onUnauthorized);
-    return () => window.removeEventListener("offline-queue-unauthorized", onUnauthorized);
+    window.addEventListener("session:expired", onUnauthorized);
+    return () => {
+      window.removeEventListener("offline-queue-unauthorized", onUnauthorized);
+      window.removeEventListener("session:expired", onUnauthorized);
+    };
   }, []);
 
   useEffect(() => {
