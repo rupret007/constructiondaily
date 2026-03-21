@@ -13,7 +13,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from audit.services import get_request_audit_context, record_audit_event
+from audit.services import get_request_audit_context, record_audit_event, record_field_changes
 from core.models import ProjectMembership
 from core.permissions import user_has_project_role
 from reports.models import (
@@ -83,6 +83,20 @@ class DailyReportViewSet(viewsets.ModelViewSet):
             ),
         ):
             raise PermissionDenied("Insufficient permissions.")
+
+        # Suggest weather if not provided
+        report_date = serializer.validated_data.get("report_date")
+        if report_date and project.latitude and project.longitude:
+            # Check if weather fields are empty
+            weather_fields = ["temperature_high_c", "temperature_low_c", "weather_summary"]
+            if not any(serializer.validated_data.get(f) for f in weather_fields):
+                try:
+                    weather_data = _fetch_weather(project.latitude, project.longitude, report_date)
+                    if weather_data:
+                        serializer.validated_data.update(weather_data)
+                except Exception:
+                    pass  # Fail silently for auto-suggestion
+
         report = serializer.save(prepared_by=self.request.user)
         record_audit_event(
             actor=self.request.user,
@@ -96,6 +110,14 @@ class DailyReportViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         with transaction.atomic():
             report = DailyReport.objects.select_for_update().get(pk=serializer.instance.pk)
+            old_values = {
+                "summary": report.summary,
+                "location": report.location,
+                "status": report.status,
+                "temperature_high_c": report.temperature_high_c,
+                "temperature_low_c": report.temperature_low_c,
+            }
+
             incoming_project = serializer.validated_data.get("project", report.project)
             if incoming_project.id != report.project_id:
                 raise ValidationError("Project cannot be changed after report creation.")
@@ -119,7 +141,16 @@ class DailyReportViewSet(viewsets.ModelViewSet):
                 ),
             ):
                 raise PermissionDenied("Insufficient permissions.")
+
             updated = serializer.save()
+
+            record_field_changes(
+                actor=self.request.user,
+                instance=updated,
+                old_values=old_values,
+                new_values={k: getattr(updated, k) for k in old_values.keys()},
+            )
+
             bump_report_revision(updated)
             record_audit_event(
                 actor=self.request.user,
@@ -231,31 +262,15 @@ class DailyReportViewSet(viewsets.ModelViewSet):
         project = report.project
         if project.latitude is None or project.longitude is None:
             return Response({"detail": "Project coordinates are required to sync weather."}, status=400)
-        params = urlencode(
-            {
-                "latitude": project.latitude,
-                "longitude": project.longitude,
-                "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,weather_code",
-                "timezone": "auto",
-                "start_date": str(report.report_date),
-                "end_date": str(report.report_date),
-            }
-        )
-        url = f"https://api.open-meteo.com/v1/forecast?{params}"
 
         try:
-            with urlopen(url, timeout=8) as response:
-                data = json.loads(response.read().decode("utf-8"))
+            weather_data = _fetch_weather(project.latitude, project.longitude, report.report_date)
         except Exception as exc:
             return Response({"detail": f"Weather sync failed: {exc}"}, status=502)
 
-        daily = data.get("daily", {})
-        report.weather_source = "open-meteo"
-        report.temperature_high_c = _first_or_none(daily.get("temperature_2m_max"))
-        report.temperature_low_c = _first_or_none(daily.get("temperature_2m_min"))
-        report.precipitation_mm = _first_or_none(daily.get("precipitation_sum"))
-        report.wind_max_kph = _first_or_none(daily.get("wind_speed_10m_max"))
-        report.weather_summary = f"WMO code {str(_first_or_none(daily.get('weather_code')))}"
+        for key, value in weather_data.items():
+            setattr(report, key, value)
+
         report.save(
             update_fields=[
                 "weather_source",
@@ -279,6 +294,33 @@ class DailyReportViewSet(viewsets.ModelViewSet):
         return Response(ReportSummarySerializer(report).data)
 
 
+def _fetch_weather(latitude, longitude, report_date):
+    params = urlencode(
+        {
+            "latitude": latitude,
+            "longitude": longitude,
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,weather_code",
+            "timezone": "auto",
+            "start_date": str(report_date),
+            "end_date": str(report_date),
+        }
+    )
+    url = f"https://api.open-meteo.com/v1/forecast?{params}"
+
+    with urlopen(url, timeout=8) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    daily = data.get("daily", {})
+    return {
+        "weather_source": "open-meteo",
+        "temperature_high_c": _first_or_none(daily.get("temperature_2m_max")),
+        "temperature_low_c": _first_or_none(daily.get("temperature_2m_min")),
+        "precipitation_mm": _first_or_none(daily.get("precipitation_sum")),
+        "wind_max_kph": _first_or_none(daily.get("wind_speed_10m_max")),
+        "weather_summary": f"WMO code {str(_first_or_none(daily.get('weather_code')))}",
+    }
+
+
 def _first_or_none(values):
     if isinstance(values, list) and values:
         return values[0]
@@ -294,6 +336,7 @@ class BaseReportEntryViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filterset_fields = ("report",)
     ordering_fields = ("created_at",)
+    field_audit_list = []  # To be overridden by subclasses
 
     def get_queryset(self):
         memberships = ProjectMembership.objects.filter(user=self.request.user, is_active=True).values_list(
@@ -315,11 +358,21 @@ class BaseReportEntryViewSet(viewsets.ModelViewSet):
             ),
         ):
             raise PermissionDenied("Insufficient permissions.")
-        serializer.save()
+        instance = serializer.save()
+        record_audit_event(
+            actor=self.request.user,
+            event_type=f"{instance.__class__.__name__.lower()}.created",
+            object_type=instance.__class__.__name__,
+            object_id=str(instance.id),
+            project_id=str(report.project_id),
+            metadata={"report_id": str(report.id)},
+        )
         bump_report_revision(report)
 
     def perform_update(self, serializer):
         report = serializer.instance.report
+        old_values = {f: getattr(serializer.instance, f) for f in self.field_audit_list}
+
         incoming_report = serializer.validated_data.get("report", report)
         if incoming_report.id != report.id:
             raise ValidationError("Report cannot be changed after entry creation.")
@@ -335,7 +388,17 @@ class BaseReportEntryViewSet(viewsets.ModelViewSet):
             ),
         ):
             raise PermissionDenied("Insufficient permissions.")
-        serializer.save()
+
+        instance = serializer.save()
+
+        record_field_changes(
+            actor=self.request.user,
+            instance=instance,
+            old_values=old_values,
+            new_values={f: getattr(instance, f) for f in self.field_audit_list},
+            project_id=str(report.project_id),
+        )
+
         bump_report_revision(report)
 
     def perform_destroy(self, instance):
@@ -359,23 +422,28 @@ class BaseReportEntryViewSet(viewsets.ModelViewSet):
 class LaborEntryViewSet(BaseReportEntryViewSet):
     serializer_class = LaborEntrySerializer
     queryset = LaborEntry.objects.select_related("report", "report__project")
+    field_audit_list = ["trade", "company", "workers", "regular_hours", "overtime_hours"]
 
 
 class EquipmentEntryViewSet(BaseReportEntryViewSet):
     serializer_class = EquipmentEntrySerializer
     queryset = EquipmentEntry.objects.select_related("report", "report__project")
+    field_audit_list = ["equipment_name", "quantity", "hours_used", "downtime_hours"]
 
 
 class MaterialEntryViewSet(BaseReportEntryViewSet):
     serializer_class = MaterialEntrySerializer
     queryset = MaterialEntry.objects.select_related("report", "report__project")
+    field_audit_list = ["material_name", "quantity_delivered", "quantity_used"]
 
 
 class WorkLogEntryViewSet(BaseReportEntryViewSet):
     serializer_class = WorkLogEntrySerializer
     queryset = WorkLogEntry.objects.select_related("report", "report__project")
+    field_audit_list = ["area", "activity", "percent_complete"]
 
 
 class DelayEntryViewSet(BaseReportEntryViewSet):
     serializer_class = DelayEntrySerializer
     queryset = DelayEntry.objects.select_related("report", "report__project")
+    field_audit_list = ["category", "cause", "hours_lost"]

@@ -44,3 +44,28 @@ def record_audit_event(
         user_agent=(resolved_ua or "")[:255],
         metadata=metadata or {},
     )
+
+
+def record_field_changes(
+    *,
+    actor,
+    instance,
+    old_values: dict[str, Any],
+    new_values: dict[str, Any],
+    project_id: str = "",
+):
+    changes = {}
+    for field, new_val in new_values.items():
+        old_val = old_values.get(field)
+        if str(old_val) != str(new_val):
+            changes[field] = {"old": old_val, "new": new_val}
+
+    if changes:
+        record_audit_event(
+            actor=actor,
+            event_type="object.fields_changed",
+            object_type=instance.__class__.__name__,
+            object_id=str(instance.pk),
+            project_id=project_id or (str(instance.project_id) if hasattr(instance, "project_id") else ""),
+            metadata={"changes": changes},
+        )
