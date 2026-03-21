@@ -133,7 +133,9 @@ class PreconstructionCopilotViewSet(viewsets.GenericViewSet):
 
 class PlanSetViewSet(viewsets.ModelViewSet):
     serializer_class = PlanSetSerializer
-    queryset = PlanSet.objects.select_related("project", "created_by", "updated_by")
+    queryset = PlanSet.objects.select_related("project", "created_by", "updated_by").prefetch_related(
+        "sheets", "documents"
+    )
     permission_classes = [IsAuthenticated]
     filterset_fields = ("project", "status")
     ordering_fields = ("created_at", "name")

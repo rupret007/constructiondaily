@@ -20,20 +20,26 @@ export function SessionExpiryMonitor() {
   if (!expired) return null;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-      <Alert variant="destructive" className="max-w-md shadow-2xl bg-destructive/10 border-destructive/20 text-destructive border-2">
-        <AlertCircle className="h-5 w-5" />
-        <AlertTitle className="font-bold text-lg">Session Expired</AlertTitle>
-        <AlertDescription className="mt-2 text-sm opacity-90">
-          Your session has ended for security. Please refresh the page to log back in and continue your work.
-        </AlertDescription>
-        <div className="mt-6 flex justify-end">
+    <div className="fixed bottom-6 right-6 z-[9999] p-2 animate-in fade-in slide-in-from-bottom-5">
+      <Alert 
+        variant="destructive" 
+        className="max-w-md shadow-2xl bg-destructive border-destructive text-destructive-foreground border-2"
+      >
+        <div className="flex items-start gap-4">
+          <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <AlertTitle className="font-bold">Session Expired</AlertTitle>
+            <AlertDescription className="mt-1 text-sm opacity-90 pr-4">
+              Your session has ended for security. Refresh the page to log back in.
+            </AlertDescription>
+          </div>
           <Button 
-            variant="destructive" 
+            size="sm"
+            variant="secondary" 
             onClick={() => window.location.reload()}
-            className="font-bold"
+            className="font-bold whitespace-nowrap"
           >
-            Refresh Now
+            Refresh
           </Button>
         </div>
       </Alert>

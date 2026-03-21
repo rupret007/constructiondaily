@@ -7,6 +7,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from core.models import Project, ProjectMembership
+from preconstruction.models import PlanSet, PlanSheet, ProjectDocument
 from reports.models import (
     ApprovalAction,
     DailyReport,
@@ -198,3 +199,51 @@ class DailyReportN1QueryRegressionTest(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertGreaterEqual(len(data), 5)
+
+
+class PreconstructionN1QueryRegressionTest(TestCase):
+    """Regression tests for Preconstruction API endpoints."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="precon_user", password="test-pass")
+        self.project = Project.objects.create(code="PR-1", name="Precon Project")
+        ProjectMembership.objects.create(
+            user=self.user, project=self.project, role=ProjectMembership.Role.ADMIN
+        )
+        self.plan_set = PlanSet.objects.create(
+            project=self.project, name="Master Plan", created_by=self.user, updated_by=self.user
+        )
+
+    def test_plan_set_list_query_performance(self):
+        """PlanSet list should prefetch sheets and documents to avoid N+1."""
+        # Create multiple sheets and documents
+        for i in range(10):
+            PlanSheet.objects.create(
+                project=self.project,
+                plan_set=self.plan_set,
+                title=f"Sheet {i}",
+                created_by=self.user,
+            )
+            ProjectDocument.objects.create(
+                project=self.project,
+                plan_set=self.plan_set,
+                title=f"Doc {i}",
+                document_type="specification",
+                created_by=self.user,
+                updated_by=self.user,
+            )
+
+        self.client.login(username="precon_user", password="test-pass")
+
+        # Queries:
+        # 1. User/Session
+        # 2. ProjectMembership (for project IDs)
+        # 3. PlanSet (select_related)
+        # 4. Prefetch sheets
+        # 5. Prefetch documents
+        with self.assertNumQueries(5):
+            response = self.client.get("/api/preconstruction/plan-sets/")
+        
+        self.assertEqual(response.status_code, 200)
+
