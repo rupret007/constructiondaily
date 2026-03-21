@@ -30,6 +30,7 @@ class Attachment(TimeStampedModel):
     scan_status = models.CharField(max_length=16, choices=ScanStatus.choices, default=ScanStatus.PENDING)
     scan_detail = models.TextField(blank=True)
     is_public = models.BooleanField(default=False)
+    annotations_json = models.JSONField(null=True, blank=True, help_text="Stores overlay data (shapes, text, arrows) for images.")
 
     class Meta:
         ordering = ("-created_at",)
