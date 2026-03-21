@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useState } from "react";
 import { Alert } from "./components/ui/alert";
 import { LoginForm } from "./components/LoginForm";
 import { NavBar, type AppArea } from "./components/NavBar";
+import { SessionExpiryMonitor } from "./components/SessionExpiryMonitor";
 
 const THEME_STORAGE_KEY = "theme";
 type Theme = "light" | "dark";
@@ -211,6 +212,7 @@ export default function App() {
         theme={theme}
         onThemeChange={setTheme}
       />
+      <SessionExpiryMonitor />
       <OfflineBadge isOnline={isOnline} lastFlushedCount={lastFlushedCount} queuedCount={queuedCount} />
       {error && (
         <Alert variant="destructive" className="mb-4">
