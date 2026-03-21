@@ -65,6 +65,21 @@ type Props = {
 };
 
 type AnalysisProvider = "mock" | "openai_vision" | "cad_dxf";
+
+const PROVIDER_PREFERENCE_KEY = "preconstruction_provider_preference";
+
+function getStoredProviderPreference(): AnalysisProvider | null {
+  if (typeof window === "undefined") return null;
+  const stored = localStorage.getItem(PROVIDER_PREFERENCE_KEY);
+  if (stored === "mock" || stored === "openai_vision" || stored === "cad_dxf") {
+    return stored;
+  }
+  return null;
+}
+
+function getInitialProvider(): AnalysisProvider {
+  return getStoredProviderPreference() ?? "mock";
+}
 const CAD_CANVAS_BASE_WIDTH = 1400;
 const CAD_CANVAS_BASE_HEIGHT = 900;
 
@@ -300,7 +315,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
   const [editCategory, setEditCategory] = useState("doors");
   const [editUnit, setEditUnit] = useState("count");
   const [editQuantity, setEditQuantity] = useState("1");
-  const [analysisProvider, setAnalysisProvider] = useState<AnalysisProvider>("mock");
+  const [analysisProvider, setAnalysisProvider] = useState<AnalysisProvider>(getInitialProvider());
   const [calibrationWidth, setCalibrationWidth] = useState("");
   const [calibrationHeight, setCalibrationHeight] = useState("");
   const [calibrationUnit, setCalibrationUnit] = useState<"feet" | "meters">("feet");
@@ -2011,6 +2026,7 @@ export function SheetViewer({ sheetId, planSetId, onBack }: Props) {
             selectedAnnotationId={selectedAnnotation?.id ?? null}
             selectedAnnotationLabel={selectedAnnotation?.label ?? null}
             analysisProvider={analysisProvider}
+            onProviderChange={setAnalysisProvider}
             onRunAnalysis={handleRunAnalysis}
             onBatchAccept={handleBatchAccept}
             onCreateTakeoffFromAnnotation={handleCreateTakeoffFromAnnotationById}

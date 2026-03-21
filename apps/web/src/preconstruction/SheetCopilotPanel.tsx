@@ -4,7 +4,24 @@ import type { PreconstructionCopilotCitation, PreconstructionCopilotResponse } f
 import { useBrowserVoiceCopilot } from "./useBrowserVoiceCopilot";
 
 type AnalysisProvider = "mock" | "openai_vision" | "cad_dxf";
+
 type AssemblyProfile = "auto" | "none" | "door_set" | "window_set" | "fixture_set";
+
+const PROVIDER_PREFERENCE_KEY = "preconstruction_provider_preference";
+
+function getStoredProviderPreference(): AnalysisProvider | null {
+  if (typeof window === "undefined") return null;
+  const stored = localStorage.getItem(PROVIDER_PREFERENCE_KEY);
+  if (stored === "mock" || stored === "openai_vision" || stored === "cad_dxf") {
+    return stored;
+  }
+  return null;
+}
+
+function setStoredProviderPreference(provider: AnalysisProvider): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(PROVIDER_PREFERENCE_KEY, provider);
+}
 
 type CopilotMessage = {
   id: string;
@@ -22,6 +39,7 @@ type Props = {
   selectedAnnotationId?: string | null;
   selectedAnnotationLabel?: string | null;
   analysisProvider: AnalysisProvider;
+  onProviderChange: (provider: AnalysisProvider) => void;
   onRunAnalysis: (prompt: string, provider: AnalysisProvider) => Promise<void>;
   onBatchAccept: () => Promise<void>;
   onCreateTakeoffFromAnnotation: (annotationId: string, assemblyProfile: AssemblyProfile) => Promise<void>;
@@ -55,6 +73,53 @@ const PROVIDER_COLORS: Record<AnalysisProvider, string> = {
   cad_dxf: "#9333ea", // purple-600
 };
 
+const PROVIDER_LABELS: Record<AnalysisProvider, string> = {
+  mock: "Mock",
+  openai_vision: "OpenAI Vision",
+  cad_dxf: "CAD (DXF)",
+};
+
+interface ProviderSelectorProps {
+  currentProvider: AnalysisProvider;
+  onProviderChange: (provider: AnalysisProvider) => void;
+  disabledProviders?: AnalysisProvider[];
+}
+
+function ProviderSelector({ currentProvider, onProviderChange, disabledProviders = [] }: ProviderSelectorProps) {
+  const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newProvider = e.target.value as AnalysisProvider;
+    setStoredProviderPreference(newProvider);
+    onProviderChange(newProvider);
+  };
+
+  return (
+    <select
+      value={currentProvider}
+      onChange={handleChange}
+      aria-label="Select AI provider"
+      style={{
+        fontSize: "0.7rem",
+        fontWeight: "bold",
+        padding: "0.1rem 0.3rem",
+        borderRadius: "0.2rem",
+        border: "none",
+        textTransform: "uppercase",
+        color: "white",
+        background: PROVIDER_COLORS[currentProvider],
+        cursor: "pointer",
+      }}
+    >
+      <option value="mock">Mock</option>
+      <option value="openai_vision" disabled={disabledProviders.includes("openai_vision")}>
+        OpenAI Vision
+      </option>
+      <option value="cad_dxf" disabled={disabledProviders.includes("cad_dxf")}>
+        CAD (DXF)
+      </option>
+    </select>
+  );
+}
+
 export function SheetCopilotPanel({
   projectId,
   planSetId,
@@ -63,6 +128,7 @@ export function SheetCopilotPanel({
   selectedAnnotationId,
   selectedAnnotationLabel,
   analysisProvider,
+  onProviderChange,
   onRunAnalysis,
   onBatchAccept,
   onCreateTakeoffFromAnnotation,
@@ -236,19 +302,10 @@ export function SheetCopilotPanel({
     <div className="card" style={{ flex: "1" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
         <h4 style={{ margin: 0 }}>Sheet copilot</h4>
-        <span
-          style={{
-            fontSize: "0.7rem",
-            fontWeight: "bold",
-            padding: "0.1rem 0.4rem",
-            borderRadius: "0.2rem",
-            textTransform: "uppercase",
-            color: "white",
-            background: PROVIDER_COLORS[analysisProvider],
-          }}
-        >
-          {analysisProvider.replace("_", " ")}
-        </span>
+        <ProviderSelector
+          currentProvider={analysisProvider}
+          onProviderChange={onProviderChange}
+        />
       </div>
       <p className="empty-hint">
         Scoped to {sheetLabel}. {selectedAnnotationId ? `Selected annotation: ${selectedAnnotationLabel || "current annotation"}.` : "Select an annotation to let me create a takeoff package."}
